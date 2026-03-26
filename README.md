@@ -1,2 +1,212 @@
 # portfolio-tracker
-Creating a POC consolidated portfolio tracker that tracks daily prices and FX, allows you to view them on a dashboard, and (TBC: sends portfolio stock updates by email/telegram, etc.)
+
+A Python-based portfolio tracker that stores holdings in SQLite, pulls latest daily stock prices and FX rates, and calculates market value and profit/loss in both native currency and SGD.
+
+---
+
+## Features
+
+- Stores current portfolio positions in a local SQLite database
+- Fetches latest daily close prices via **yfinance** (US & SGX tickers)
+- Fetches daily FX rates (USD → SGD, extensible to more currencies)
+- Calculates market value, unrealised P&L in native currency and SGD
+- Inserts immutable daily snapshots (no history overwritten)
+- Clean CLI interface for all operations
+- Structured for future extensions: Streamlit dashboard, Telegram/email alerts, GitHub Actions scheduling
+
+---
+
+## Project structure
+
+```
+portfolio-tracker/
+├── data/
+│   └── .gitkeep           # database lives here (git-ignored)
+├── scripts/
+│   ├── init_db.py         # bootstrap the database
+│   ├── seed_holdings.py   # seed sample positions
+│   └── run_daily_update.py# fetch prices & store daily snapshot
+├── src/
+│   ├── config.py          # central config (paths, constants)
+│   ├── db.py              # all SQLite operations
+│   ├── models.py          # Holding, DailyPrice, CurrencyRate dataclasses
+│   ├── main.py            # argparse CLI entry-point
+│   ├── services/
+│   │   ├── fx_data.py     # FX rate fetching & caching
+│   │   ├── market_data.py # stock price fetching (yfinance)
+│   │   └── updater.py     # daily update orchestrator
+│   └── utils/
+│       ├── dates.py       # date helpers
+│       └── logging_config.py
+├── tests/
+│   ├── test_calculations.py
+│   ├── test_db.py
+│   └── test_updater.py
+├── requirements.txt
+└── README.md
+```
+
+---
+
+## Setup
+
+### 1. Clone & create a virtual environment
+
+```bash
+git clone https://github.com/josshhz11/portfolio-tracker.git
+cd portfolio-tracker
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+```
+
+### 2. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+## Usage
+
+All commands are available via the CLI (`python -m src.main`) or via the standalone scripts in `scripts/`.
+
+### Initialise the database
+
+```bash
+python -m src.main init-db
+# or
+python scripts/init_db.py
+```
+
+### Seed sample holdings
+
+```bash
+python -m src.main seed-holdings
+# Use --force to truncate and re-seed if holdings already exist
+python -m src.main seed-holdings --force
+# or
+python scripts/seed_holdings.py [--force]
+```
+
+Sample holdings seeded:
+
+| Ticker | Shares | Cost/share | Currency | Platform |
+|--------|-------:|----------:|----------|----------|
+| NBIS   | 62     | 92.455    | USD      | Moomoo   |
+| SNAP   | 2000   | 8.68      | USD      | Moomoo   |
+| STAI   | 21     | 61.355    | USD      | Moomoo   |
+| VOYG   | 50     | 49.99     | USD      | Moomoo   |
+| WOK    | 11     | 210.056   | USD      | Moomoo   |
+| D05.SI | 600    | 35.827    | SGD      | Tiger    |
+| D05.SI | 200    | 54.00     | SGD      | IBKR     |
+
+### Run the daily update
+
+```bash
+python -m src.main update-daily
+# Override date (useful for backfills or testing):
+python -m src.main update-daily --date 2024-01-15
+# or
+python scripts/run_daily_update.py [--date YYYY-MM-DD]
+```
+
+### Show all holdings
+
+```bash
+python -m src.main show-holdings
+```
+
+### Show daily snapshot
+
+```bash
+python -m src.main show-daily             # today
+python -m src.main show-daily --date 2024-01-15
+```
+
+### Custom database path
+
+All commands accept `--db PATH`:
+
+```bash
+python -m src.main --db /path/to/my.db show-holdings
+```
+
+---
+
+## Running tests
+
+```bash
+pytest tests/ -v
+```
+
+All tests run fully offline (no network calls — market data and FX fetching is mocked).
+
+---
+
+## Database schema
+
+### `holdings`
+Stores current portfolio positions. A ticker can appear multiple times across different platforms.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | INTEGER PK | auto-increment |
+| ticker | TEXT | e.g. `AAPL`, `D05.SI` |
+| shares_owned | REAL | |
+| cost_per_share | REAL | average cost basis (native currency) |
+| currency | TEXT | ISO code, e.g. `USD`, `SGD` |
+| platform | TEXT | brokerage name |
+| created_at | TEXT | UTC timestamp |
+| updated_at | TEXT | UTC timestamp |
+
+### `daily_prices`
+Immutable daily snapshots; `UNIQUE(holding_id, date)` prevents duplicates.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | INTEGER PK | |
+| holding_id | INTEGER FK | → holdings.id |
+| ticker | TEXT | |
+| price_per_share | REAL | latest close (native currency) |
+| date | TEXT | YYYY-MM-DD |
+| market_value | REAL | shares × price |
+| profit | REAL | unrealised P&L (native currency) |
+| market_value_sgd | REAL | market_value × fx_rate |
+| profit_sgd | REAL | profit × fx_rate |
+| created_at | TEXT | |
+
+### `currencies`
+Daily FX rates versus SGD; `UNIQUE(currency, date)` prevents duplicates.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | INTEGER PK | |
+| currency | TEXT | ISO code |
+| rate | REAL | 1 unit of currency in SGD |
+| date | TEXT | YYYY-MM-DD |
+| created_at | TEXT | |
+
+---
+
+## Configuration
+
+Edit `src/config.py` to:
+
+- Change the database path (`DB_PATH`)
+- Add new FX currency pairs (`FX_TICKER_MAP`)
+- Adjust price lookback window (`PRICE_LOOKBACK_DAYS`)
+
+---
+
+## Future roadmap
+
+- [ ] Streamlit / React dashboard
+- [ ] Telegram / email daily summary
+- [ ] GitHub Actions scheduled workflow (daily cron)
+- [ ] Additional FX currencies (GBP, HKD, …)
+- [ ] Transaction history table (buy/sell tracking)
+- [ ] Realised P&L calculation
+- [ ] Benchmark comparison (e.g. vs STI, S&P 500)
+- [ ] Platform-level and ticker-level analytics
+
