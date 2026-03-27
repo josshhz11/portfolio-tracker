@@ -89,7 +89,7 @@ python -m src.main seed-holdings --force
 python scripts/seed_holdings.py [--force]
 ```
 
-Sample holdings seeded (fictional data):
+Sample holdings seeded (fictional data by default):
 
 | Ticker | Shares | Cost/share | Currency | Platform |
 |--------|-------:|----------:|----------|----------|
@@ -100,6 +100,13 @@ Sample holdings seeded (fictional data):
 | CRWV   | 11     | 75.056    | USD      | Moomoo   |
 | D05.SI | 600    | 45.82     | SGD      | Tiger    |
 | D05.SI | 200    | 54.00     | SGD      | IBKR     |
+
+Use a private CSV for real seeds (preferred)
+
+- Place a CSV at `data/seed_holdings.csv` (git-ignored). Headers must be: `ticker,shares_owned,cost_per_share,currency,platform`.
+- Example row: `AAPL,10,150.25,USD,IBKR`
+- Run with a custom path if needed: `python scripts/seed_holdings.py --seed-csv /path/to/my_seeds.csv`.
+- If the CSV is missing, the script falls back to the fictional table above.
 
 ### Run the daily update
 

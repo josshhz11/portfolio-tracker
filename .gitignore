@@ -36,6 +36,7 @@ venv.bak/
 data/*.db
 data/*.sqlite
 data/*.sqlite3
+data/seed_holdings.csv
 
 # Logs
 *.log
