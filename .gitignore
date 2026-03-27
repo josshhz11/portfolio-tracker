@@ -38,6 +38,9 @@ data/*.sqlite
 data/*.sqlite3
 data/seed_holdings.csv
 
+# Streamlit local config
+.streamlit/
+
 # Logs
 *.log
 logs/
