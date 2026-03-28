@@ -31,6 +31,8 @@ portfolio-tracker/
 │   ├── db.py              # all Supabase/Postgres operations
 │   ├── models.py          # Holding, DailyPrice, CurrencyRate dataclasses
 │   ├── main.py            # argparse CLI entry-point
+│   ├── api/
+│   │   └── app.py         # FastAPI backend routes
 │   ├── services/
 │   │   ├── fx_data.py     # FX rate fetching & caching
 │   │   ├── market_data.py # stock price fetching (yfinance)
@@ -129,6 +131,15 @@ python -m src.main update-daily --date 2024-01-15
 # or
 python scripts/run_daily_update.py [--date YYYY-MM-DD]
 ```
+
+### Run the FastAPI backend
+
+```bash
+uvicorn src.api.app:app --reload
+```
+
+- Open interactive docs at `http://127.0.0.1:8000/docs`.
+- API routes cover holdings CRUD, daily update trigger, snapshot and daily prices, plus market/FX helper endpoints.
 
 ### Automated daily run (GitHub Actions)
 
