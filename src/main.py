@@ -53,7 +53,7 @@ def cmd_init_db(args: argparse.Namespace) -> int:
 
 def cmd_seed_holdings(args: argparse.Namespace) -> int:
     """Seed sample holdings (idempotent: clears and re-inserts)."""
-    from src.db import get_connection, insert_holding
+    from src.db import insert_holding
 
     db_path = Path(args.db)
     conn = initialize_database(db_path)

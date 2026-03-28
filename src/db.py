@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from src.config import DB_PATH
-from src.models import CurrencyRate, DailyPrice, Holding
+from src.models import DailyPrice, Holding
 from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)

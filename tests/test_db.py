@@ -6,9 +6,7 @@ from pathlib import Path
 import pytest
 
 from src.db import (
-    create_tables,
     get_all_holdings,
-    get_connection,
     get_currency_rate,
     get_daily_prices_by_date,
     get_holding_by_id,

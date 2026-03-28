@@ -18,7 +18,6 @@ from typing import Optional
 from src.config import DB_PATH
 from src.db import (
     get_all_holdings,
-    get_connection,
     initialize_database,
     insert_daily_price,
 )

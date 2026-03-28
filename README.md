@@ -118,6 +118,11 @@ python -m src.main update-daily --date 2024-01-15
 python scripts/run_daily_update.py [--date YYYY-MM-DD]
 ```
 
+### Automated daily run (GitHub Actions)
+
+- A scheduled workflow runs daily at 00:05 UTC: see [.github/workflows/daily-update.yml](.github/workflows/daily-update.yml).
+- It initialises a fresh DB, seeds the demo holdings, runs the daily updater, and uploads `data/portfolio.db` as an artifact (7-day retention). Update the workflow if you want to persist elsewhere.
+
 ### Show all holdings
 
 ```bash
@@ -146,6 +151,12 @@ python -m src.main --db /path/to/my.db show-holdings
 ```bash
 pytest tests/ -v
 ```
+
+### Dashboard (Streamlit)
+
+- Install deps (`pip install -r requirements.txt`), then run: `streamlit run streamlit_app.py`.
+- Uses `data/portfolio.db` by default; override with `PORTFOLIO_DB_PATH=/path/to/db streamlit run streamlit_app.py`.
+- Shows a portfolio value line chart (SGD) and a filterable table of the latest daily snapshot (filters are in-memory for speed).
 
 All tests run fully offline (no network calls — market data and FX fetching is mocked).
 

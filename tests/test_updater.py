@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.db import (
-    get_all_holdings,
     get_daily_prices_by_date,
     initialize_database,
     insert_holding,
