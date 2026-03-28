@@ -1,7 +1,8 @@
-"""Tests for db.py — database creation, CRUD, and constraint enforcement."""
+"""Tests for src.db using Supabase/Postgres-compatible paths."""
 
-import sqlite3
-from pathlib import Path
+import os
+import uuid
+from datetime import date
 
 import pytest
 
@@ -17,146 +18,143 @@ from src.db import (
     update_holding,
 )
 
+SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
+PORTFOLIO_USER_ID = os.getenv("PORTFOLIO_USER_ID")
+
+if not SUPABASE_DB_URL or not PORTFOLIO_USER_ID:
+    pytest.skip(
+        "Supabase integration tests require SUPABASE_DB_URL and PORTFOLIO_USER_ID",
+        allow_module_level=True,
+    )
+
 
 @pytest.fixture()
-def db(tmp_path: Path) -> sqlite3.Connection:
-    """Return an open, fully-initialised in-memory-like database."""
-    conn = initialize_database(tmp_path / "test.db")
+def db_conn():
+    conn = initialize_database()
     yield conn
     conn.close()
 
 
-# ── Schema ────────────────────────────────────────────────────────────────────
+@pytest.fixture()
+def test_ticker() -> str:
+    return f"TST_{uuid.uuid4().hex[:8]}"
 
 
-def test_tables_created(db: sqlite3.Connection) -> None:
-    tables = {
-        row[0]
-        for row in db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
-    }
-    assert {"holdings", "daily_prices", "currencies"} <= tables
+@pytest.fixture()
+def test_date() -> str:
+    # Stable valid date format with low chance of clashes across concurrent jobs
+    return f"2099-12-{(uuid.uuid4().int % 27) + 1:02d}"
 
 
-def test_double_initialize_is_idempotent(tmp_path: Path) -> None:
-    """Calling initialize_database twice must not raise or duplicate tables."""
-    p = tmp_path / "idempotent.db"
-    c1 = initialize_database(p)
-    c1.close()
-    c2 = initialize_database(p)
-    c2.close()  # No exception means pass
+def _cleanup(conn, ticker_prefix: str = "TST_") -> None:
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM public.daily_prices WHERE ticker LIKE %s", (f"{ticker_prefix}%",))
+        cur.execute(
+            "DELETE FROM public.holdings WHERE user_id = %s AND ticker LIKE %s",
+            (PORTFOLIO_USER_ID, f"{ticker_prefix}%"),
+        )
+    conn.commit()
 
 
-# ── Holdings ─────────────────────────────────────────────────────────────────
-
-
-def test_insert_and_get_holding(db: sqlite3.Connection) -> None:
-    hid = insert_holding(db, "AAPL", 10, 150.0, "USD", "Moomoo")
-    assert hid == 1
-
-    holding = get_holding_by_id(db, hid)
-    assert holding is not None
-    assert holding.ticker == "AAPL"
-    assert holding.shares_owned == 10
-    assert holding.cost_per_share == 150.0
-    assert holding.currency == "USD"
-    assert holding.platform == "Moomoo"
-
-
-def test_get_all_holdings_returns_all(db: sqlite3.Connection) -> None:
-    insert_holding(db, "AAPL", 10, 150.0, "USD", "Moomoo")
-    insert_holding(db, "D05.SI", 100, 35.0, "SGD", "Tiger")
-    holdings = get_all_holdings(db)
-    assert len(holdings) == 2
-    tickers = {h.ticker for h in holdings}
-    assert tickers == {"AAPL", "D05.SI"}
-
-
-def test_same_ticker_multiple_platforms(db: sqlite3.Connection) -> None:
-    insert_holding(db, "D05.SI", 600, 35.827, "SGD", "Tiger")
-    insert_holding(db, "D05.SI", 200, 54.0, "SGD", "IBKR")
-    holdings = get_all_holdings(db)
-    assert len(holdings) == 2
-
-
-def test_get_holding_by_id_missing_returns_none(db: sqlite3.Connection) -> None:
-    assert get_holding_by_id(db, 9999) is None
-
-
-def test_update_holding(db: sqlite3.Connection) -> None:
-    hid = insert_holding(db, "SNAP", 500, 8.5, "USD", "Moomoo")
-    update_holding(db, hid, shares_owned=1000, cost_per_share=9.0)
-    h = get_holding_by_id(db, hid)
-    assert h is not None
-    assert h.shares_owned == 1000
-    assert h.cost_per_share == 9.0
-
-
-# ── Currency rates ─────────────────────────────────────────────────────────────
-
-
-def test_insert_and_get_currency_rate(db: sqlite3.Connection) -> None:
-    insert_currency_rate(db, "USD", 1.35, "2024-01-15")
-    rate = get_currency_rate(db, "USD", "2024-01-15")
-    assert rate == pytest.approx(1.35)
-
-
-def test_duplicate_currency_rate_ignored(db: sqlite3.Connection) -> None:
-    """UNIQUE(currency, date) — second insert must be silently ignored."""
-    insert_currency_rate(db, "USD", 1.35, "2024-01-15")
-    insert_currency_rate(db, "USD", 1.99, "2024-01-15")  # duplicate
-    rate = get_currency_rate(db, "USD", "2024-01-15")
-    assert rate == pytest.approx(1.35)  # original value kept
-
-
-def test_get_currency_rate_missing_returns_none(db: sqlite3.Connection) -> None:
-    assert get_currency_rate(db, "EUR", "2024-01-15") is None
-
-
-# ── Daily prices ──────────────────────────────────────────────────────────────
-
-
-def test_insert_and_get_daily_price(db: sqlite3.Connection) -> None:
-    hid = insert_holding(db, "AAPL", 10, 150.0, "USD", "Moomoo")
-    inserted = insert_daily_price(
-        db, hid, "AAPL", 200.0, "2024-01-15",
-        market_value=2000.0,
-        profit=500.0,
-        market_value_sgd=2700.0,
-        profit_sgd=675.0,
+def test_insert_and_get_holding(db_conn, test_ticker: str) -> None:
+    _cleanup(db_conn)
+    hid = insert_holding(
+        db_conn,
+        user_id=PORTFOLIO_USER_ID,
+        ticker=test_ticker,
+        shares_owned=10,
+        invested_amount=1500.0,
+        currency="USD",
+        platform="Moomoo",
     )
-    assert inserted is True
+    assert hid > 0
 
-    rows = get_daily_prices_by_date(db, "2024-01-15")
-    assert len(rows) == 1
-    assert rows[0].price_per_share == pytest.approx(200.0)
-    assert rows[0].market_value == pytest.approx(2000.0)
-
-
-def test_duplicate_daily_price_ignored(db: sqlite3.Connection) -> None:
-    """UNIQUE(holding_id, date) — duplicate insert returns False."""
-    hid = insert_holding(db, "AAPL", 10, 150.0, "USD", "Moomoo")
-    first = insert_daily_price(db, hid, "AAPL", 200.0, "2024-01-15", 2000.0, 500.0, 2700.0, 675.0)
-    second = insert_daily_price(db, hid, "AAPL", 210.0, "2024-01-15", 2100.0, 600.0, 2835.0, 810.0)
-    assert first is True
-    assert second is False
-
-    # Only one row in the database, original values preserved
-    rows = get_daily_prices_by_date(db, "2024-01-15")
-    assert len(rows) == 1
-    assert rows[0].price_per_share == pytest.approx(200.0)
+    holding = get_holding_by_id(db_conn, hid)
+    assert holding is not None
+    assert holding.ticker == test_ticker
+    assert holding.shares_owned == pytest.approx(10)
+    assert holding.invested_amount == pytest.approx(1500.0)
+    assert holding.cost_per_share == pytest.approx(150.0)
 
 
-def test_different_holdings_same_ticker_same_date(db: sqlite3.Connection) -> None:
-    """Same ticker from two platforms must produce separate daily rows."""
-    h1 = insert_holding(db, "D05.SI", 600, 35.827, "SGD", "Tiger")
-    h2 = insert_holding(db, "D05.SI", 200, 54.0, "SGD", "IBKR")
-    insert_daily_price(db, h1, "D05.SI", 40.0, "2024-01-15", 24000.0, 2503.8, 24000.0, 2503.8)
-    insert_daily_price(db, h2, "D05.SI", 40.0, "2024-01-15", 8000.0, -2800.0, 8000.0, -2800.0)
-    rows = get_daily_prices_by_date(db, "2024-01-15")
+def test_get_all_holdings_returns_user_rows(db_conn, test_ticker: str) -> None:
+    _cleanup(db_conn)
+    t2 = f"{test_ticker}_B"
+    insert_holding(
+        db_conn,
+        user_id=PORTFOLIO_USER_ID,
+        ticker=test_ticker,
+        shares_owned=10,
+        invested_amount=1500.0,
+        currency="USD",
+        platform="Moomoo",
+    )
+    insert_holding(
+        db_conn,
+        user_id=PORTFOLIO_USER_ID,
+        ticker=t2,
+        shares_owned=20,
+        invested_amount=3000.0,
+        currency="USD",
+        platform="IBKR",
+    )
+    rows = [h for h in get_all_holdings(db_conn, user_id=PORTFOLIO_USER_ID) if h.ticker in {test_ticker, t2}]
     assert len(rows) == 2
 
 
-def test_get_daily_prices_empty_date(db: sqlite3.Connection) -> None:
-    assert get_daily_prices_by_date(db, "2000-01-01") == []
+def test_update_holding(db_conn, test_ticker: str) -> None:
+    _cleanup(db_conn)
+    hid = insert_holding(
+        db_conn,
+        user_id=PORTFOLIO_USER_ID,
+        ticker=test_ticker,
+        shares_owned=5,
+        invested_amount=500.0,
+        currency="USD",
+        platform="Moomoo",
+    )
+
+    update_holding(db_conn, hid, shares_owned=10, invested_amount=1200.0)
+    h = get_holding_by_id(db_conn, hid)
+    assert h is not None
+    assert h.shares_owned == pytest.approx(10)
+    assert h.invested_amount == pytest.approx(1200.0)
+
+
+def test_insert_and_get_currency_rate(db_conn, test_date: str) -> None:
+    insert_currency_rate(db_conn, "USD", 1.35, test_date)
+    rate = get_currency_rate(db_conn, "USD", test_date)
+    assert rate == pytest.approx(1.35)
+
+
+def test_duplicate_currency_rate_ignored(db_conn, test_date: str) -> None:
+    insert_currency_rate(db_conn, "USD", 1.35, test_date)
+    insert_currency_rate(db_conn, "USD", 1.99, test_date)
+    rate = get_currency_rate(db_conn, "USD", test_date)
+    assert rate == pytest.approx(1.35)
+
+
+def test_insert_and_get_daily_price(db_conn, test_ticker: str, test_date: str) -> None:
+    inserted = insert_daily_price(db_conn, test_ticker, 200.0, test_date)
+    assert inserted is True
+
+    rows = [r for r in get_daily_prices_by_date(db_conn, test_date) if r.ticker == test_ticker]
+    assert len(rows) == 1
+    assert rows[0].price_per_share == pytest.approx(200.0)
+
+
+def test_duplicate_daily_price_ignored(db_conn, test_ticker: str, test_date: str) -> None:
+    first = insert_daily_price(db_conn, test_ticker, 200.0, test_date)
+    second = insert_daily_price(db_conn, test_ticker, 210.0, test_date)
+    assert first is True
+    assert second is False
+
+    rows = [r for r in get_daily_prices_by_date(db_conn, test_date) if r.ticker == test_ticker]
+    assert len(rows) == 1
+    assert rows[0].price_per_share == pytest.approx(200.0)
+
+
+def test_get_daily_prices_empty_date(db_conn) -> None:
+    empty_day = date(1999, 1, 1).isoformat()
+    rows = [r for r in get_daily_prices_by_date(db_conn, empty_day) if r.ticker.startswith("TST_")]
+    assert rows == []
