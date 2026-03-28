@@ -12,14 +12,11 @@ Workflow
 """
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Optional
 
-from src.config import DB_PATH
+from src.db import get_all_holdings, initialize_database, insert_daily_price
 from src.db import (
-    get_all_holdings,
-    initialize_database,
-    insert_daily_price,
+    resolve_default_user_id,
 )
 from src.models import Holding
 from src.services.fx_data import get_fx_rate_to_sgd, get_supported_currencies_from_holdings
@@ -54,13 +51,13 @@ class UpdateSummary:
 
 
 def run_daily_update(
-    db_path: Path = DB_PATH,
+    user_id: Optional[str] = None,
     date: Optional[str] = None,
 ) -> UpdateSummary:
     """Run the full daily portfolio update workflow.
 
     Args:
-        db_path: Path to the SQLite database.
+        user_id: Optional user id filter for holdings.
         date:    Override the update date (``YYYY-MM-DD``). Defaults to today.
 
     Returns:
@@ -69,9 +66,10 @@ def run_daily_update(
     update_date = date or today_str()
     summary = UpdateSummary(date=update_date)
 
-    conn = initialize_database(db_path)
+    conn = initialize_database()
     try:
-        holdings: list[Holding] = get_all_holdings(conn)
+        effective_user_id = user_id or resolve_default_user_id()
+        holdings: list[Holding] = get_all_holdings(conn, user_id=effective_user_id)
         summary.total_holdings = len(holdings)
 
         if not holdings:
@@ -104,7 +102,20 @@ def run_daily_update(
             if ticker not in prices:
                 logger.warning("No price available for ticker '%s'. Affected holdings will be skipped.", ticker)
 
-        # ── Step 3: Compute and store daily snapshots ───────────────────────
+        # ── Step 3: Store ticker prices once per day ───────────────────────
+        for ticker, price in prices.items():
+            inserted = insert_daily_price(
+                conn=conn,
+                ticker=ticker,
+                price_per_share=price,
+                date=update_date,
+            )
+            if inserted:
+                summary.successful += 1
+            else:
+                summary.skipped += 1
+
+        # ── Step 4: Compute portfolio totals for summary ───────────────────
         for holding in holdings:
             try:
                 price = prices.get(holding.ticker)
@@ -135,31 +146,11 @@ def run_daily_update(
                     continue
 
                 market_value = holding.shares_owned * price
-                profit = holding.shares_owned * (price - holding.cost_per_share)
+                profit = market_value - holding.invested_amount
                 market_value_sgd = market_value * fx_rate
                 profit_sgd = profit * fx_rate
-
-                inserted = insert_daily_price(
-                    conn=conn,
-                    holding_id=holding.id,  # type: ignore[arg-type]
-                    ticker=holding.ticker,
-                    price_per_share=price,
-                    date=update_date,
-                    market_value=market_value,
-                    profit=profit,
-                    market_value_sgd=market_value_sgd,
-                    profit_sgd=profit_sgd,
-                )
-
-                if inserted:
-                    summary.successful += 1
-                    summary.total_market_value_sgd += market_value_sgd
-                    summary.total_profit_sgd += profit_sgd
-                else:
-                    summary.skipped += 1
-                    # Still count the value for totals so the snapshot is complete
-                    summary.total_market_value_sgd += market_value_sgd
-                    summary.total_profit_sgd += profit_sgd
+                summary.total_market_value_sgd += market_value_sgd
+                summary.total_profit_sgd += profit_sgd
 
             except Exception as exc:  # noqa: BLE001
                 logger.exception(

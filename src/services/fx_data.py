@@ -1,7 +1,8 @@
 """FX service: fetches and caches daily exchange rates versus SGD."""
 
-import sqlite3
 from typing import Optional
+
+import psycopg
 
 import yfinance as yf
 
@@ -16,7 +17,7 @@ logger = get_logger(__name__)
 def get_fx_rate_to_sgd(
     currency: str,
     date: str,
-    conn: Optional[sqlite3.Connection] = None,
+    conn: Optional[psycopg.Connection] = None,
 ) -> float:
     """Return the exchange rate: 1 unit of *currency* in SGD.
 
