@@ -1,12 +1,12 @@
 # portfolio-tracker
 
-A Python-based portfolio tracker that stores holdings in SQLite, pulls latest daily stock prices and FX rates, and calculates market value and profit/loss in both native currency and SGD.
+A Python-based portfolio tracker that stores holdings in Supabase Postgres, pulls latest daily stock prices and FX rates, and calculates market value and profit/loss in both native currency and SGD.
 
 ---
 
 ## Features
 
-- Stores current portfolio positions in a local SQLite database
+- Stores current portfolio positions in Supabase Postgres
 - Fetches latest daily close prices via **yfinance** (US & SGX tickers)
 - Fetches daily FX rates (USD → SGD, extensible to more currencies)
 - Calculates market value, unrealised P&L in native currency and SGD
@@ -28,7 +28,7 @@ portfolio-tracker/
 │   └── run_daily_update.py# fetch prices & store daily snapshot
 ├── src/
 │   ├── config.py          # central config (paths, constants)
-│   ├── db.py              # all SQLite operations
+│   ├── db.py              # all Supabase/Postgres operations
 │   ├── models.py          # Holding, DailyPrice, CurrencyRate dataclasses
 │   ├── main.py            # argparse CLI entry-point
 │   ├── services/
@@ -63,6 +63,18 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
 ```bash
 pip install -r requirements.txt
+```
+
+### 3. Configure environment variables
+
+Set these before running CLI/scripts/dashboard:
+
+```bash
+export SUPABASE_DB_URL="postgresql://..."
+export PORTFOLIO_USER_ID="your-supabase-auth-user-uuid"
+# Windows PowerShell:
+# $env:SUPABASE_DB_URL="postgresql://..."
+# $env:PORTFOLIO_USER_ID="your-supabase-auth-user-uuid"
 ```
 
 ---
@@ -103,8 +115,8 @@ Sample holdings seeded (fictional data by default):
 
 Use a private CSV for real seeds (preferred)
 
-- Place a CSV at `data/seed_holdings.csv` (git-ignored). Headers must be: `ticker,shares_owned,cost_per_share,currency,platform`.
-- Example row: `AAPL,10,150.25,USD,IBKR`
+- Place a CSV at `data/seed_holdings.csv` (git-ignored). Headers must be: `user_id,ticker,shares_owned,invested_amount,currency,platform`.
+- Example row: `your-user-uuid,AAPL,10,1502.50,USD,IBKR`
 - Run with a custom path if needed: `python scripts/seed_holdings.py --seed-csv /path/to/my_seeds.csv`.
 - If the CSV is missing, the script falls back to the fictional table above.
 
@@ -117,6 +129,11 @@ python -m src.main update-daily --date 2024-01-15
 # or
 python scripts/run_daily_update.py [--date YYYY-MM-DD]
 ```
+
+### Automated daily run (GitHub Actions)
+
+- A scheduled workflow runs daily at 00:05 UTC: see [.github/workflows/daily-update.yml](.github/workflows/daily-update.yml).
+- The workflow now runs `update-daily` directly and reads `SUPABASE_DB_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `PORTFOLIO_USER_ID` from GitHub Actions secrets.
 
 ### Show all holdings
 
@@ -131,13 +148,9 @@ python -m src.main show-daily             # today
 python -m src.main show-daily --date 2024-01-15
 ```
 
-### Custom database path
+### User scoping
 
-All commands accept `--db PATH`:
-
-```bash
-python -m src.main --db /path/to/my.db show-holdings
-```
+All commands accept `--user-id UUID` (or use `PORTFOLIO_USER_ID` env var).
 
 ---
 
@@ -147,6 +160,12 @@ python -m src.main --db /path/to/my.db show-holdings
 pytest tests/ -v
 ```
 
+### Dashboard (Streamlit)
+
+- Install deps (`pip install -r requirements.txt`), then run: `streamlit run streamlit_app.py`.
+- Uses `SUPABASE_DB_URL` and `PORTFOLIO_USER_ID` from environment.
+- Shows a portfolio value line chart (SGD) and a filterable table of the latest daily snapshot (filters are in-memory for speed).
+
 All tests run fully offline (no network calls — market data and FX fetching is mocked).
 
 ---
@@ -154,53 +173,49 @@ All tests run fully offline (no network calls — market data and FX fetching is
 ## Database schema
 
 ### `holdings`
-Stores current portfolio positions. A ticker can appear multiple times across different platforms.
+Stores current portfolio positions with user ownership. A ticker can appear across different platforms.
 
 | Column | Type | Notes |
 |---|---|---|
-| id | INTEGER PK | auto-increment |
+| id | BIGINT PK | generated identity |
+| user_id | UUID | references `auth.users(id)` |
 | ticker | TEXT | e.g. `AAPL`, `D05.SI` |
-| shares_owned | REAL | |
-| cost_per_share | REAL | average cost basis (native currency) |
+| shares_owned | NUMERIC | |
+| invested_amount | NUMERIC | total invested amount in native currency |
 | currency | TEXT | ISO code, e.g. `USD`, `SGD` |
 | platform | TEXT | brokerage name |
-| created_at | TEXT | UTC timestamp |
-| updated_at | TEXT | UTC timestamp |
+| created_at | TIMESTAMPTZ | UTC timestamp |
+| updated_at | TIMESTAMPTZ | UTC timestamp |
 
 ### `daily_prices`
-Immutable daily snapshots; `UNIQUE(holding_id, date)` prevents duplicates.
+Daily ticker prices; `UNIQUE(ticker, price_date)` prevents duplicates.
 
 | Column | Type | Notes |
 |---|---|---|
-| id | INTEGER PK | |
-| holding_id | INTEGER FK | → holdings.id |
+| id | BIGINT PK | |
 | ticker | TEXT | |
-| price_per_share | REAL | latest close (native currency) |
-| date | TEXT | YYYY-MM-DD |
-| market_value | REAL | shares × price |
-| profit | REAL | unrealised P&L (native currency) |
-| market_value_sgd | REAL | market_value × fx_rate |
-| profit_sgd | REAL | profit × fx_rate |
-| created_at | TEXT | |
+| price_per_share | NUMERIC | latest close (native currency) |
+| price_date | DATE | YYYY-MM-DD |
+| created_at | TIMESTAMPTZ | |
 
 ### `currencies`
-Daily FX rates versus SGD; `UNIQUE(currency, date)` prevents duplicates.
+Daily FX rates versus SGD; `UNIQUE(currency, rate_date)` prevents duplicates.
 
 | Column | Type | Notes |
 |---|---|---|
-| id | INTEGER PK | |
+| id | BIGINT PK | |
 | currency | TEXT | ISO code |
-| rate | REAL | 1 unit of currency in SGD |
-| date | TEXT | YYYY-MM-DD |
-| created_at | TEXT | |
+| rate | NUMERIC | 1 unit of currency in SGD |
+| rate_date | DATE | YYYY-MM-DD |
+| created_at | TIMESTAMPTZ | |
 
 ---
 
 ## Configuration
 
-Edit `src/config.py` to:
+Edit `src/config.py` / environment variables to:
 
-- Change the database path (`DB_PATH`)
+- Set `SUPABASE_DB_URL` and `PORTFOLIO_USER_ID`
 - Add new FX currency pairs (`FX_TICKER_MAP`)
 - Adjust price lookback window (`PRICE_LOOKBACK_DAYS`)
 

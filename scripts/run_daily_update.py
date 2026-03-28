@@ -6,7 +6,7 @@ and inserts daily snapshots into the database.
 
 Usage
 -----
-    python scripts/run_daily_update.py [--db PATH] [--date YYYY-MM-DD]
+    python scripts/run_daily_update.py [--user-id UUID] [--date YYYY-MM-DD]
 """
 
 import argparse
@@ -15,7 +15,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config import DB_PATH
+from src.config import DEFAULT_USER_ID
+from src.db import resolve_default_user_id
 from src.services.updater import run_daily_update
 from src.utils.logging_config import setup_logging
 
@@ -24,10 +25,10 @@ def main() -> None:
     setup_logging()
     parser = argparse.ArgumentParser(description="Run the daily portfolio price/FX update.")
     parser.add_argument(
-        "--db",
-        default=str(DB_PATH),
-        metavar="PATH",
-        help="Path to the SQLite database file (default: %(default)s).",
+        "--user-id",
+        default=DEFAULT_USER_ID or None,
+        metavar="UUID",
+        help="Portfolio user id (or set PORTFOLIO_USER_ID).",
     )
     parser.add_argument(
         "--date",
@@ -37,7 +38,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    summary = run_daily_update(db_path=Path(args.db), date=args.date)
+    summary = run_daily_update(user_id=args.user_id or resolve_default_user_id(), date=args.date)
 
     print("\n" + "=" * 60)
     print("DAILY UPDATE COMPLETE")

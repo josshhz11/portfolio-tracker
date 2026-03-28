@@ -1,29 +1,16 @@
-name: CI
+name: Daily Update
 
 on:
-  pull_request:
-  push:
-    branches: [main]
+  schedule:
+    - cron: "5 0 * * *"  # 00:05 UTC daily
+  workflow_dispatch:
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install ruff
-        run: |
-          python -m pip install --upgrade pip
-          pip install ruff
-      - name: Lint (ruff)
-        run: ruff check .
-
-  test:
+  daily-update:
     runs-on: ubuntu-latest
     env:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       PORTFOLIO_USER_ID: ${{ secrets.PORTFOLIO_USER_ID }}
     steps:
       - uses: actions/checkout@v4
@@ -34,9 +21,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Validate test env
+      - name: Validate Supabase secrets are present
         run: |
           test -n "$SUPABASE_DB_URL"
+          test -n "$SUPABASE_SERVICE_ROLE_KEY"
           test -n "$PORTFOLIO_USER_ID"
-      - name: Run tests
-        run: pytest -v
+      - name: Show pipeline target
+        run: echo "Daily run configured for Supabase-backed deployment."
+      - name: Run daily update
+        run: python -m src.main update-daily

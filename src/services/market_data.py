@@ -1,6 +1,5 @@
 """Market data service: fetches latest stock prices via yfinance."""
 
-import logging
 from typing import Optional
 
 import yfinance as yf
