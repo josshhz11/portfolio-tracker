@@ -265,7 +265,7 @@ execute function public.apply_trade_to_holding();
 
 /*
     Policies for Holdings and Trades (by user),
-    and daily_prices and currencies (public)
+    and daily_prices and currencies (readable by authenticated users)
 */
 
 -- RLS for all tables
@@ -328,23 +328,6 @@ for insert
 to authenticated
 with check (auth.uid() = user_id);
 
-drop policy if exists "users can update own trades" on public.trades;
-
-create policy "users can update own trades"
-on public.trades
-for update
-to authenticated
-using (auth.uid() = user_id)
-with check (auth.uid() = user_id);
-
-drop policy if exists "users can delete own trades" on public.trades;
-
-create policy "users can delete own trades"
-on public.trades
-for delete
-to authenticated
-using (auth.uid() = user_id);
-
 -- Public/Authenticated Reads
 -- Daily_Prices Policies
 
@@ -355,8 +338,6 @@ on public.daily_prices
 for select
 to authenticated
 using (true);
-
-drop policy if exists "users can view own holdings" on public.holdings;
 
 -- Currencies Policies
 
