@@ -3,9 +3,18 @@
 import os
 from pathlib import Path
 
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - optional dependency fallback
+    load_dotenv = None
+
 # ── Paths ────────────────────────────────────────────────────────────────────
 # Root of the repository (two levels up from this file: src/ -> repo root)
 BASE_DIR: Path = Path(__file__).resolve().parent.parent
+
+# Load local .env for developer convenience (GitHub Actions secrets still apply in CI).
+if load_dotenv is not None:
+    load_dotenv(BASE_DIR / ".env", override=False)
 
 DATA_DIR: Path = BASE_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
