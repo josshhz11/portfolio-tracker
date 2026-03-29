@@ -130,10 +130,23 @@ python -m src.main update-daily --date 2024-01-15
 python scripts/run_daily_update.py [--date YYYY-MM-DD]
 ```
 
+### Capture daily portfolio snapshots
+
+```bash
+python -m src.main snapshot-daily
+# Override date:
+python -m src.main snapshot-daily --date 2024-01-15
+```
+
+- This command reads holdings + that day's `daily_prices` + that day's `currencies` and writes one row per holding into `portfolio_snapshots`.
+- Snapshot insert uses upsert behavior on `(holding_id, snapshot_date)` so reruns for the same day remain idempotent.
+
 ### Automated daily run (GitHub Actions)
 
 - A scheduled workflow runs daily at 00:05 UTC: see [.github/workflows/daily-update.yml](.github/workflows/daily-update.yml).
-- The workflow runs `update-daily --all-users --exclude-user-id "$PORTFOLIO_USER_ID"`.
+- The workflow runs two sequential commands:
+	1. `update-daily --all-users --exclude-user-id "$PORTFOLIO_USER_ID"`
+	2. `snapshot-daily --all-users --exclude-user-id "$PORTFOLIO_USER_ID"`
 - `PORTFOLIO_USER_ID` is used as an excluded test user id so fictional test holdings are skipped in daily market fetches.
 - Required GitHub Actions secrets: `SUPABASE_DB_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `PORTFOLIO_USER_ID`.
 
