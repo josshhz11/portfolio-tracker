@@ -85,7 +85,16 @@ def cmd_update_daily(args: argparse.Namespace) -> int:
         print(f"Invalid date format: '{date_override}'. Expected YYYY-MM-DD.", file=sys.stderr)
         return 2
 
-    summary = run_daily_update(user_id=_effective_user_id(args.user_id), date=date_override)
+    if args.exclude_user_id and not args.all_users:
+        print("--exclude-user-id can only be used together with --all-users.", file=sys.stderr)
+        return 2
+
+    selected_user_id = None if args.all_users else _effective_user_id(args.user_id)
+    summary = run_daily_update(
+        user_id=selected_user_id,
+        date=date_override,
+        exclude_user_id=args.exclude_user_id,
+    )
     print(summary)
     return 0 if summary.failed == 0 else 1
 
@@ -187,6 +196,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--date",
         metavar="YYYY-MM-DD",
         help="Override the update date (default: today).",
+    )
+    p_upd.add_argument(
+        "--all-users",
+        action="store_true",
+        help="Update all users' holdings (ignores --user-id).",
+    )
+    p_upd.add_argument(
+        "--exclude-user-id",
+        metavar="UUID",
+        help="When using --all-users, exclude holdings belonging to this user id.",
     )
 
     sub.add_parser("show-holdings", help="Display holdings for this user.")

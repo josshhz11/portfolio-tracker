@@ -74,3 +74,6 @@ Thumbs.db
 # Distribution
 *.tar.gz
 *.whl
+
+# Context
+context.txt
