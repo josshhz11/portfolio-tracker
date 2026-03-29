@@ -20,27 +20,39 @@ A Python-based portfolio tracker that stores holdings in Supabase Postgres, pull
 
 ```
 portfolio-tracker/
+├── .github/
+│   └── workflows/
+│       ├── ci.yml
+│       └── daily-update.yml
 ├── data/
-│   └── .gitkeep           # database lives here (git-ignored)
+│   ├── .gitkeep
+│   └── schema.sql         # Supabase/Postgres schema
 ├── scripts/
-│   ├── init_db.py         # bootstrap the database
-│   ├── seed_holdings.py   # seed sample positions
-│   └── run_daily_update.py# fetch prices & store daily snapshot
+│   ├── check_supabase_connection.py
+│   ├── init_db.py
+│   ├── run_daily_update.py
+│   └── seed_holdings.py
 ├── src/
-│   ├── config.py          # central config (paths, constants)
-│   ├── db.py              # all Supabase/Postgres operations
-│   ├── models.py          # Holding, DailyPrice, CurrencyRate dataclasses
-│   ├── main.py            # argparse CLI entry-point
+│   ├── api/
+│   │   ├── __init__.py
+│   │   └── app.py         # FastAPI backend routes
+│   ├── config.py
+│   ├── db.py
+│   ├── main.py
+│   ├── models.py
 │   ├── services/
-│   │   ├── fx_data.py     # FX rate fetching & caching
-│   │   ├── market_data.py # stock price fetching (yfinance)
-│   │   └── updater.py     # daily update orchestrator
+│   │   ├── fx_data.py
+│   │   ├── market_data.py
+│   │   ├── snapshots.py   # daily portfolio snapshot capture
+│   │   └── updater.py
 │   └── utils/
-│       ├── dates.py       # date helpers
+│       ├── dates.py
 │       └── logging_config.py
+├── streamlit_app.py       # dashboard app
 ├── tests/
 │   ├── test_calculations.py
 │   ├── test_db.py
+│   ├── test_market_fx_data.py
 │   └── test_updater.py
 ├── requirements.txt
 └── README.md
