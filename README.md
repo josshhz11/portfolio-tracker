@@ -140,6 +140,25 @@ uvicorn src.api.app:app --reload
 
 - Open interactive docs at `http://127.0.0.1:8000/docs`.
 - API routes cover holdings CRUD, daily update trigger, snapshot and daily prices, plus market/FX helper endpoints.
+- User-scoped endpoints are authenticated using one of these modes (`API_AUTH_MODE`):
+	- `jwt`: requires `Authorization: Bearer <supabase-access-token>` (recommended for frontend integration).
+	- `header`: requires `X-User-Id` (simple local/dev fallback).
+	- `jwt_or_header`: accepts either (default during migration).
+- For `jwt` or `jwt_or_header`, configure one of:
+	- `SUPABASE_JWT_SECRET` (HS256 projects), or
+	- `SUPABASE_PROJECT_URL` (RS256/JWKS verification via `/auth/v1/.well-known/jwks.json`).
+- JWT user scope is enforced via the token `sub` claim matching `{user_id}` in the route.
+- Frontend local origins are allowed by default (`http://localhost:3000`, `http://localhost:5173`). Override via `API_CORS_ORIGINS` (comma-separated).
+
+Common frontend query patterns:
+
+```bash
+# Paginated holdings with filters
+GET /users/{user_id}/holdings?limit=50&offset=0&ticker=AAPL&platform=IBKR&currency=USD
+
+# Paginated daily snapshot with filters
+GET /users/{user_id}/daily/snapshot?date=2026-03-29&limit=50&offset=0&currency=USD
+```
 
 ### Automated daily run (GitHub Actions)
 

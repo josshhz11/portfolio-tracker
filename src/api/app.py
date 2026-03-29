@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from scripts.seed_holdings import load_seed_rows
+from src.api.auth import require_request_user, require_user_scope
 from src.db import (
     get_all_holdings,
     get_connection,
@@ -81,10 +84,57 @@ class FxRateResponse(BaseModel):
     rate_to_sgd: float
 
 
+class PaginatedHoldingsResponse(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[HoldingResponse]
+
+
+class DailySnapshotResponse(BaseModel):
+    holding_id: int
+    ticker: str
+    shares_owned: float
+    invested_amount: float
+    cost_per_share: float
+    price_per_share: float
+    currency: str
+    platform: str
+    market_value: float
+    profit: float
+    fx_rate: float
+    market_value_sgd: float
+    profit_sgd: float
+
+
+class PaginatedSnapshotResponse(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[DailySnapshotResponse]
+
+
 app = FastAPI(
     title="Portfolio Tracker API",
     version="1.0.0",
     description="REST API for holdings management, daily updates, and market/FX data.",
+)
+
+_cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "API_CORS_ORIGINS",
+        "http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if origin.strip()
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -170,30 +220,64 @@ def seed_holdings(payload: SeedRequest) -> SeedResponse:
         conn.close()
 
 
-@app.get("/users/{user_id}/holdings", response_model=list[HoldingResponse])
-def list_holdings(user_id: str) -> list[HoldingResponse]:
+@app.get("/users/{user_id}/holdings", response_model=PaginatedHoldingsResponse)
+def list_holdings(
+    user_id: str,
+    _scope_user_id: str = Depends(require_user_scope),
+    ticker: str | None = Query(default=None),
+    platform: str | None = Query(default=None),
+    currency: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> PaginatedHoldingsResponse:
     conn = get_connection()
     try:
         rows = get_all_holdings(conn, user_id=user_id)
-        return [_holding_to_response(h) for h in rows]
+        if ticker:
+            ticker_upper = ticker.upper()
+            rows = [h for h in rows if h.ticker.upper() == ticker_upper]
+        if platform:
+            platform_lower = platform.lower()
+            rows = [h for h in rows if h.platform.lower() == platform_lower]
+        if currency:
+            currency_upper = currency.upper()
+            rows = [h for h in rows if h.currency.upper() == currency_upper]
+
+        total = len(rows)
+        paged = rows[offset : offset + limit]
+        return PaginatedHoldingsResponse(
+            total=total,
+            limit=limit,
+            offset=offset,
+            items=[_holding_to_response(h) for h in paged],
+        )
     finally:
         conn.close()
 
 
 @app.get("/holdings/{holding_id}", response_model=HoldingResponse)
-def get_holding(holding_id: int) -> HoldingResponse:
+def get_holding(
+    holding_id: int,
+    request_user_id: str = Depends(require_request_user),
+) -> HoldingResponse:
     conn = get_connection()
     try:
         row = get_holding_by_id(conn, holding_id)
         if row is None:
             raise HTTPException(status_code=404, detail="Holding not found")
+        if row.user_id != request_user_id:
+            raise HTTPException(status_code=403, detail="Forbidden for this user")
         return _holding_to_response(row)
     finally:
         conn.close()
 
 
 @app.post("/users/{user_id}/holdings", response_model=HoldingResponse, status_code=201)
-def create_holding(user_id: str, payload: HoldingCreate) -> HoldingResponse:
+def create_holding(
+    user_id: str,
+    payload: HoldingCreate,
+    _scope_user_id: str = Depends(require_user_scope),
+) -> HoldingResponse:
     conn = get_connection()
     try:
         row_id = insert_holding(
@@ -214,7 +298,11 @@ def create_holding(user_id: str, payload: HoldingCreate) -> HoldingResponse:
 
 
 @app.patch("/holdings/{holding_id}", response_model=HoldingResponse)
-def patch_holding(holding_id: int, payload: HoldingUpdate) -> HoldingResponse:
+def patch_holding(
+    holding_id: int,
+    payload: HoldingUpdate,
+    request_user_id: str = Depends(require_request_user),
+) -> HoldingResponse:
     if payload.shares_owned is None and payload.invested_amount is None and payload.platform is None:
         raise HTTPException(status_code=400, detail="At least one field must be provided")
 
@@ -223,6 +311,8 @@ def patch_holding(holding_id: int, payload: HoldingUpdate) -> HoldingResponse:
         existing = get_holding_by_id(conn, holding_id)
         if existing is None:
             raise HTTPException(status_code=404, detail="Holding not found")
+        if existing.user_id != request_user_id:
+            raise HTTPException(status_code=403, detail="Forbidden for this user")
 
         update_holding(
             conn,
@@ -241,7 +331,11 @@ def patch_holding(holding_id: int, payload: HoldingUpdate) -> HoldingResponse:
 
 
 @app.delete("/users/{user_id}/holdings/{holding_id}")
-def delete_holding(user_id: str, holding_id: int) -> dict[str, Any]:
+def delete_holding(
+    user_id: str,
+    holding_id: int,
+    _scope_user_id: str = Depends(require_user_scope),
+) -> dict[str, Any]:
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -261,7 +355,11 @@ def delete_holding(user_id: str, holding_id: int) -> dict[str, Any]:
 
 
 @app.post("/users/{user_id}/daily/update")
-def update_daily(user_id: str, payload: DailyUpdateRequest) -> dict[str, Any]:
+def update_daily(
+    user_id: str,
+    payload: DailyUpdateRequest,
+    _scope_user_id: str = Depends(require_user_scope),
+) -> dict[str, Any]:
     if payload.date:
         _validate_date_or_400(payload.date)
 
@@ -269,15 +367,41 @@ def update_daily(user_id: str, payload: DailyUpdateRequest) -> dict[str, Any]:
     return asdict(summary)
 
 
-@app.get("/users/{user_id}/daily/snapshot")
-def get_daily_snapshot(user_id: str, date: str | None = Query(default=None)) -> list[dict[str, Any]]:
+@app.get("/users/{user_id}/daily/snapshot", response_model=PaginatedSnapshotResponse)
+def get_daily_snapshot(
+    user_id: str,
+    _scope_user_id: str = Depends(require_user_scope),
+    date: str | None = Query(default=None),
+    ticker: str | None = Query(default=None),
+    platform: str | None = Query(default=None),
+    currency: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> PaginatedSnapshotResponse:
     date = date or today_str()
     _validate_date_or_400(date)
 
     conn = get_connection()
     try:
         rows = get_daily_snapshot_by_date(conn, date=date, user_id=user_id)
-        return [asdict(r) for r in rows]
+        if ticker:
+            ticker_upper = ticker.upper()
+            rows = [r for r in rows if r.ticker.upper() == ticker_upper]
+        if platform:
+            platform_lower = platform.lower()
+            rows = [r for r in rows if r.platform.lower() == platform_lower]
+        if currency:
+            currency_upper = currency.upper()
+            rows = [r for r in rows if r.currency.upper() == currency_upper]
+
+        total = len(rows)
+        paged = rows[offset : offset + limit]
+        return PaginatedSnapshotResponse(
+            total=total,
+            limit=limit,
+            offset=offset,
+            items=[DailySnapshotResponse(**asdict(r)) for r in paged],
+        )
     finally:
         conn.close()
 
