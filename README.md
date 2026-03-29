@@ -133,7 +133,9 @@ python scripts/run_daily_update.py [--date YYYY-MM-DD]
 ### Automated daily run (GitHub Actions)
 
 - A scheduled workflow runs daily at 00:05 UTC: see [.github/workflows/daily-update.yml](.github/workflows/daily-update.yml).
-- The workflow now runs `update-daily` directly and reads `SUPABASE_DB_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `PORTFOLIO_USER_ID` from GitHub Actions secrets.
+- The workflow runs `update-daily --all-users --exclude-user-id "$PORTFOLIO_USER_ID"`.
+- `PORTFOLIO_USER_ID` is used as an excluded test user id so fictional test holdings are skipped in daily market fetches.
+- Required GitHub Actions secrets: `SUPABASE_DB_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `PORTFOLIO_USER_ID`.
 
 ### Show all holdings
 

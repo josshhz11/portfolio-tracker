@@ -27,6 +27,6 @@ jobs:
           test -n "$SUPABASE_SERVICE_ROLE_KEY"
           test -n "$PORTFOLIO_USER_ID"
       - name: Show pipeline target
-        run: echo "Daily run configured for Supabase-backed deployment."
+        run: echo "Daily run configured for Supabase-backed deployment (all users, excluding test user)."
       - name: Run daily update
-        run: python -m src.main update-daily
+        run: python -m src.main update-daily --all-users --exclude-user-id "$PORTFOLIO_USER_ID"
