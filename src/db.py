@@ -250,6 +250,7 @@ def get_daily_snapshot_by_date(
     conn: psycopg.Connection,
     date: str,
     user_id: Optional[str] = None,
+    exclude_user_id: Optional[str] = None,
 ) -> list[DailySnapshot]:
     """Compute per-holding snapshot from holdings + daily_prices + currencies for a date."""
     sql = """
@@ -273,10 +274,17 @@ def get_daily_snapshot_by_date(
         ORDER BY h.id
     """
     params: list[object] = [date, date]
-    where_clause = ""
+    conditions: list[str] = []
     if user_id:
-        where_clause = "WHERE h.user_id = %s"
+        conditions.append("h.user_id = %s")
         params.append(user_id)
+    if exclude_user_id:
+        conditions.append("h.user_id <> %s")
+        params.append(exclude_user_id)
+
+    where_clause = ""
+    if conditions:
+        where_clause = f"WHERE {' AND '.join(conditions)}"
 
     with conn.cursor() as cur:
         cur.execute(sql.format(where_clause=where_clause), tuple(params))
@@ -308,6 +316,57 @@ def get_daily_snapshot_by_date(
             )
         )
     return snapshots
+
+
+def upsert_portfolio_snapshot(
+    conn: psycopg.Connection,
+    user_id: str,
+    snapshot: DailySnapshot,
+    date: str,
+) -> None:
+    """Insert or update a portfolio snapshot row for a holding/date."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO public.portfolio_snapshots (
+                user_id,
+                holding_id,
+                snapshot_date,
+                shares_owned,
+                invested_amount,
+                price_per_share,
+                fx_rate,
+                market_value,
+                market_value_sgd,
+                unrealized_profit,
+                unrealized_profit_sgd
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (holding_id, snapshot_date)
+            DO UPDATE SET
+                shares_owned = EXCLUDED.shares_owned,
+                invested_amount = EXCLUDED.invested_amount,
+                price_per_share = EXCLUDED.price_per_share,
+                fx_rate = EXCLUDED.fx_rate,
+                market_value = EXCLUDED.market_value,
+                market_value_sgd = EXCLUDED.market_value_sgd,
+                unrealized_profit = EXCLUDED.unrealized_profit,
+                unrealized_profit_sgd = EXCLUDED.unrealized_profit_sgd
+            """,
+            (
+                user_id,
+                snapshot.holding_id,
+                date,
+                snapshot.shares_owned,
+                snapshot.invested_amount,
+                snapshot.price_per_share,
+                snapshot.fx_rate,
+                snapshot.market_value,
+                snapshot.market_value_sgd,
+                snapshot.profit,
+                snapshot.profit_sgd,
+            ),
+        )
 
 
 def resolve_default_user_id() -> str:
