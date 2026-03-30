@@ -25,7 +25,13 @@ def _require_db_url() -> str:
 
 def get_connection(_db_path: Optional[Path] = None) -> psycopg.Connection:
     """Open a Postgres connection (db path is ignored for compatibility)."""
-    conn = psycopg.connect(_require_db_url(), row_factory=dict_row)
+    # Supabase pooler (PgBouncer transaction mode) is not compatible with
+    # server-side prepared statements used by default by psycopg.
+    conn = psycopg.connect(
+        _require_db_url(),
+        row_factory=dict_row,
+        prepare_threshold=None,
+    )
     return conn
 
 
