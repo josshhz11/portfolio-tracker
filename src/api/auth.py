@@ -2,10 +2,8 @@
 
 Supports:
 - Supabase JWT verification from Authorization: Bearer <token>
-- Optional legacy/dev header auth via X-User-Id
 
 Configuration:
-- API_AUTH_MODE: jwt | header | jwt_or_header (default: jwt_or_header)
 - SUPABASE_JWT_SECRET: HS256 secret (optional)
 - SUPABASE_PROJECT_URL: e.g. https://<project-ref>.supabase.co (for JWKS/RS256)
 - SUPABASE_JWT_AUDIENCE: default authenticated
@@ -66,46 +64,35 @@ def _decode_supabase_token(token: str) -> dict[str, Any]:
 
 def _resolve_request_user_id(
     authorization: str | None,
-    x_user_id: str | None,
 ) -> str:
-    mode = os.getenv("API_AUTH_MODE", "jwt_or_header").strip().lower()
-    allow_jwt = mode in {"jwt", "jwt_or_header"}
-    allow_header = mode in {"header", "jwt_or_header"}
-
     bearer_token = _extract_bearer_token(authorization)
-    if bearer_token and allow_jwt:
-        try:
-            claims = _decode_supabase_token(bearer_token)
-        except jwt.InvalidTokenError as exc:
-            raise HTTPException(status_code=401, detail=f"Invalid JWT: {exc}") from exc
-        sub = claims.get("sub")
-        if not sub:
-            raise HTTPException(status_code=401, detail="JWT missing sub claim")
-        return str(sub)
-
-    if x_user_id and allow_header:
-        return x_user_id
-
-    if allow_jwt:
+    if not bearer_token:
         raise HTTPException(status_code=401, detail="Missing bearer token")
-    raise HTTPException(status_code=401, detail="Missing X-User-Id header")
+
+    try:
+        claims = _decode_supabase_token(bearer_token)
+    except jwt.InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail=f"Invalid JWT: {exc}") from exc
+
+    sub = claims.get("sub")
+    if not sub:
+        raise HTTPException(status_code=401, detail="JWT missing sub claim")
+    return str(sub)
 
 
 def require_request_user(
     authorization: str | None = Header(default=None, alias="Authorization"),
-    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ) -> str:
     """Return caller user id from auth credentials."""
-    return _resolve_request_user_id(authorization=authorization, x_user_id=x_user_id)
+    return _resolve_request_user_id(authorization=authorization)
 
 
 def require_user_scope(
     user_id: str,
     authorization: str | None = Header(default=None, alias="Authorization"),
-    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ) -> str:
     """Ensure caller identity matches path user_id."""
-    request_user_id = _resolve_request_user_id(authorization=authorization, x_user_id=x_user_id)
+    request_user_id = _resolve_request_user_id(authorization=authorization)
     if request_user_id != user_id:
         raise HTTPException(status_code=403, detail="Authenticated user does not match path user_id")
     return request_user_id

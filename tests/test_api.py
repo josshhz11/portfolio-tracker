@@ -51,6 +51,23 @@ def client() -> TestClient:
     return TestClient(api_module.app)
 
 
+@pytest.fixture()
+def auth_factory(monkeypatch: pytest.MonkeyPatch):
+    test_secret = "this-is-a-32-char-minimum-secret-key"
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", test_secret)
+    monkeypatch.setenv("SUPABASE_JWT_AUDIENCE", "authenticated")
+
+    def _headers(user_id: str) -> dict[str, str]:
+        token = jwt.encode(
+            {"sub": user_id, "aud": "authenticated"},
+            test_secret,
+            algorithm="HS256",
+        )
+        return {"Authorization": f"Bearer {token}"}
+
+    return _headers
+
+
 def _mock_holding(hid: int = 1, user_id: str = "user-1", ticker: str = "AAPL"):
     return SimpleNamespace(
         id=hid,
@@ -76,12 +93,16 @@ def test_root_and_health(client: TestClient) -> None:
     assert r2.json() == {"status": "ok"}
 
 
-def test_list_holdings_returns_contract(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_list_holdings_returns_contract(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_factory,
+) -> None:
     fake_conn = _FakeConnection()
     monkeypatch.setattr(api_module, "get_connection", lambda: fake_conn)
     monkeypatch.setattr(api_module, "get_all_holdings", lambda conn, user_id: [_mock_holding(user_id=user_id)])
 
-    resp = client.get("/users/abc-123/holdings", headers={"X-User-Id": "abc-123"})
+    resp = client.get("/users/abc-123/holdings", headers=auth_factory("abc-123"))
     assert resp.status_code == 200
     body = resp.json()
     assert body["total"] == 1
@@ -96,15 +117,14 @@ def test_list_holdings_requires_auth_header(client: TestClient) -> None:
     assert resp.status_code == 401
 
 
-def test_list_holdings_rejects_mismatched_user_scope(client: TestClient) -> None:
-    resp = client.get("/users/abc-123/holdings", headers={"X-User-Id": "other-user"})
+def test_list_holdings_rejects_mismatched_user_scope(client: TestClient, auth_factory) -> None:
+    resp = client.get("/users/abc-123/holdings", headers=auth_factory("other-user"))
     assert resp.status_code == 403
 
 
-def test_list_holdings_accepts_valid_jwt_in_jwt_mode(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_list_holdings_accepts_valid_jwt(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_conn = _FakeConnection()
     test_secret = "this-is-a-32-char-minimum-secret-key"
-    monkeypatch.setenv("API_AUTH_MODE", "jwt")
     monkeypatch.setenv("SUPABASE_JWT_SECRET", test_secret)
     monkeypatch.setenv("SUPABASE_JWT_AUDIENCE", "authenticated")
     monkeypatch.setattr(api_module, "get_connection", lambda: fake_conn)
@@ -124,31 +144,35 @@ def test_list_holdings_accepts_valid_jwt_in_jwt_mode(client: TestClient, monkeyp
 
 
 def test_list_holdings_rejects_missing_jwt_in_jwt_mode(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("API_AUTH_MODE", "jwt")
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", "this-is-a-32-char-minimum-secret-key")
     resp = client.get("/users/abc-123/holdings")
     assert resp.status_code == 401
 
 
-def test_get_holding_not_found(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_holding_not_found(client: TestClient, monkeypatch: pytest.MonkeyPatch, auth_factory) -> None:
     fake_conn = _FakeConnection()
     monkeypatch.setattr(api_module, "get_connection", lambda: fake_conn)
     monkeypatch.setattr(api_module, "get_holding_by_id", lambda conn, hid: None)
 
-    resp = client.get("/holdings/999", headers={"X-User-Id": "user-1"})
+    resp = client.get("/holdings/999", headers=auth_factory("user-1"))
     assert resp.status_code == 404
     assert "not found" in resp.json()["detail"].lower()
 
 
-def test_get_holding_rejects_mismatched_owner(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_holding_rejects_mismatched_owner(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_factory,
+) -> None:
     fake_conn = _FakeConnection()
     monkeypatch.setattr(api_module, "get_connection", lambda: fake_conn)
     monkeypatch.setattr(api_module, "get_holding_by_id", lambda conn, hid: _mock_holding(user_id="owner-1"))
 
-    resp = client.get("/holdings/1", headers={"X-User-Id": "other-user"})
+    resp = client.get("/holdings/1", headers=auth_factory("other-user"))
     assert resp.status_code == 403
 
 
-def test_create_holding_201(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_create_holding_201(client: TestClient, monkeypatch: pytest.MonkeyPatch, auth_factory) -> None:
     fake_conn = _FakeConnection()
     monkeypatch.setattr(api_module, "get_connection", lambda: fake_conn)
     monkeypatch.setattr(api_module, "insert_holding", lambda **kwargs: 77)
@@ -161,42 +185,50 @@ def test_create_holding_201(client: TestClient, monkeypatch: pytest.MonkeyPatch)
         "currency": "USD",
         "platform": "Moomoo",
     }
-    resp = client.post("/users/u-1/holdings", json=payload, headers={"X-User-Id": "u-1"})
+    resp = client.post("/users/u-1/holdings", json=payload, headers=auth_factory("u-1"))
     assert resp.status_code == 201
     assert resp.json()["id"] == 77
 
 
-def test_patch_holding_requires_at_least_one_field(client: TestClient) -> None:
-    resp = client.patch("/holdings/1", json={}, headers={"X-User-Id": "u-1"})
+def test_patch_holding_requires_at_least_one_field(client: TestClient, auth_factory) -> None:
+    resp = client.patch("/holdings/1", json={}, headers=auth_factory("u-1"))
     assert resp.status_code == 400
     assert "at least one field" in resp.json()["detail"].lower()
 
 
-def test_delete_holding_not_found_for_user(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_delete_holding_not_found_for_user(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_factory,
+) -> None:
     fake_conn = _FakeConnection(fetchone_result=None)
     monkeypatch.setattr(api_module, "get_connection", lambda: fake_conn)
 
-    resp = client.delete("/users/u-1/holdings/9", headers={"X-User-Id": "u-1"})
+    resp = client.delete("/users/u-1/holdings/9", headers=auth_factory("u-1"))
     assert resp.status_code == 404
 
 
-def test_delete_holding_success(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_delete_holding_success(client: TestClient, monkeypatch: pytest.MonkeyPatch, auth_factory) -> None:
     fake_conn = _FakeConnection(fetchone_result={"id": 9})
     monkeypatch.setattr(api_module, "get_connection", lambda: fake_conn)
 
-    resp = client.delete("/users/u-1/holdings/9", headers={"X-User-Id": "u-1"})
+    resp = client.delete("/users/u-1/holdings/9", headers=auth_factory("u-1"))
     assert resp.status_code == 200
     assert resp.json()["deleted"] is True
     assert fake_conn.committed is True
 
 
-def test_update_daily_rejects_bad_date(client: TestClient) -> None:
-    resp = client.post("/users/u-1/daily/update", json={"date": "2026/03/29"}, headers={"X-User-Id": "u-1"})
+def test_update_daily_rejects_bad_date(client: TestClient, auth_factory) -> None:
+    resp = client.post("/users/u-1/daily/update", json={"date": "2026/03/29"}, headers=auth_factory("u-1"))
     assert resp.status_code == 400
     assert "yyyy-mm-dd" in resp.json()["detail"].lower()
 
 
-def test_snapshot_endpoint_filter_and_pagination(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_snapshot_endpoint_filter_and_pagination(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_factory,
+) -> None:
     fake_conn = _FakeConnection()
     monkeypatch.setattr(api_module, "get_connection", lambda: fake_conn)
     monkeypatch.setattr(
@@ -239,7 +271,7 @@ def test_snapshot_endpoint_filter_and_pagination(client: TestClient, monkeypatch
     resp = client.get(
         "/users/u-1/daily/snapshot",
         params={"date": "2026-03-29", "currency": "SGD", "limit": 1, "offset": 0},
-        headers={"X-User-Id": "u-1"},
+        headers=auth_factory("u-1"),
     )
     assert resp.status_code == 200
     body = resp.json()

@@ -194,11 +194,8 @@ uvicorn src.api.app:app --reload
 
 - Open interactive docs at `http://127.0.0.1:8000/docs`.
 - API routes cover holdings CRUD, daily update trigger, snapshot and daily prices, plus market/FX helper endpoints.
-- User-scoped endpoints are authenticated using one of these modes (`API_AUTH_MODE`):
-	- `jwt`: requires `Authorization: Bearer <supabase-access-token>` (recommended for frontend integration).
-	- `header`: requires `X-User-Id` (simple local/dev fallback).
-	- `jwt_or_header`: accepts either (default during migration).
-- For `jwt` or `jwt_or_header`, configure one of:
+- User-scoped endpoints are JWT-only and require `Authorization: Bearer <supabase-access-token>`.
+- Configure one of:
 	- `SUPABASE_JWT_SECRET` (HS256 projects), or
 	- `SUPABASE_PROJECT_URL` (RS256/JWKS verification via `/auth/v1/.well-known/jwks.json`).
 - JWT user scope is enforced via the token `sub` claim matching `{user_id}` in the route.
