@@ -20,12 +20,18 @@ A Python-based portfolio tracker that stores holdings in Supabase Postgres, pull
 
 ```
 portfolio-tracker/
+├── .github/
+│   └── workflows/
+│       ├── ci.yml
+│       └── daily-update.yml
 ├── data/
-│   └── .gitkeep           # database lives here (git-ignored)
+│   ├── .gitkeep
+│   └── schema.sql         # Supabase/Postgres schema
 ├── scripts/
-│   ├── init_db.py         # bootstrap the database
-│   ├── seed_holdings.py   # seed sample positions
-│   └── run_daily_update.py# fetch prices & store daily snapshot
+│   ├── check_supabase_connection.py
+│   ├── init_db.py
+│   ├── run_daily_update.py
+│   └── seed_holdings.py
 ├── src/
 │   ├── config.py          # central config (paths, constants)
 │   ├── db.py              # all Supabase/Postgres operations
@@ -34,15 +40,18 @@ portfolio-tracker/
 │   ├── api/
 │   │   └── app.py         # FastAPI backend routes
 │   ├── services/
-│   │   ├── fx_data.py     # FX rate fetching & caching
-│   │   ├── market_data.py # stock price fetching (yfinance)
-│   │   └── updater.py     # daily update orchestrator
+│   │   ├── fx_data.py
+│   │   ├── market_data.py
+│   │   ├── snapshots.py   # daily portfolio snapshot capture
+│   │   └── updater.py
 │   └── utils/
-│       ├── dates.py       # date helpers
+│       ├── dates.py
 │       └── logging_config.py
+├── streamlit_app.py       # dashboard app
 ├── tests/
 │   ├── test_calculations.py
 │   ├── test_db.py
+│   ├── test_market_fx_data.py
 │   └── test_updater.py
 ├── requirements.txt
 └── README.md
@@ -132,6 +141,51 @@ python -m src.main update-daily --date 2024-01-15
 python scripts/run_daily_update.py [--date YYYY-MM-DD]
 ```
 
+### Capture daily portfolio snapshots
+
+```bash
+python -m src.main snapshot-daily
+# Override date:
+python -m src.main snapshot-daily --date 2024-01-15
+```
+
+- This command reads holdings + that day's `daily_prices` + that day's `currencies` and writes one row per holding into `portfolio_snapshots`.
+- Snapshot insert uses upsert behavior on `(holding_id, snapshot_date)` so reruns for the same day remain idempotent.
+
+### Automated daily run (GitHub Actions)
+
+- A scheduled workflow runs daily at 00:05 UTC: see [.github/workflows/daily-update.yml](.github/workflows/daily-update.yml).
+- The workflow runs two sequential commands:
+	1. `update-daily --all-users --exclude-user-id "$PORTFOLIO_USER_ID"`
+	2. `snapshot-daily --all-users --exclude-user-id "$PORTFOLIO_USER_ID"`
+- `PORTFOLIO_USER_ID` is used as an excluded test user id so fictional test holdings are skipped in daily market fetches.
+- Required GitHub Actions secrets: `SUPABASE_DB_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `PORTFOLIO_USER_ID`.
+
+### Show all holdings
+
+```bash
+python -m src.main show-holdings
+```
+
+### Show daily snapshot
+
+```bash
+python -m src.main show-daily             # today
+python -m src.main show-daily --date 2024-01-15
+```
+
+### User scoping
+
+All commands accept `--user-id UUID` (or use `PORTFOLIO_USER_ID` env var).
+
+---
+
+## Running tests
+
+```bash
+pytest tests/ -v
+```
+
 ### Run the FastAPI backend
 
 ```bash
@@ -158,36 +212,6 @@ GET /users/{user_id}/holdings?limit=50&offset=0&ticker=AAPL&platform=IBKR&curren
 
 # Paginated daily snapshot with filters
 GET /users/{user_id}/daily/snapshot?date=2026-03-29&limit=50&offset=0&currency=USD
-```
-
-### Automated daily run (GitHub Actions)
-
-- A scheduled workflow runs daily at 00:05 UTC: see [.github/workflows/daily-update.yml](.github/workflows/daily-update.yml).
-- The workflow now runs `update-daily` directly and reads `SUPABASE_DB_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `PORTFOLIO_USER_ID` from GitHub Actions secrets.
-
-### Show all holdings
-
-```bash
-python -m src.main show-holdings
-```
-
-### Show daily snapshot
-
-```bash
-python -m src.main show-daily             # today
-python -m src.main show-daily --date 2024-01-15
-```
-
-### User scoping
-
-All commands accept `--user-id UUID` (or use `PORTFOLIO_USER_ID` env var).
-
----
-
-## Running tests
-
-```bash
-pytest tests/ -v
 ```
 
 ### Dashboard (Streamlit)

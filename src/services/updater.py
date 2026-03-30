@@ -15,9 +15,6 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from src.db import get_all_holdings, initialize_database, insert_daily_price
-from src.db import (
-    resolve_default_user_id,
-)
 from src.models import Holding
 from src.services.fx_data import get_fx_rate_to_sgd, get_supported_currencies_from_holdings
 from src.services.market_data import get_latest_prices
@@ -53,12 +50,14 @@ class UpdateSummary:
 def run_daily_update(
     user_id: Optional[str] = None,
     date: Optional[str] = None,
+    exclude_user_id: Optional[str] = None,
 ) -> UpdateSummary:
     """Run the full daily portfolio update workflow.
 
     Args:
-        user_id: Optional user id filter for holdings.
-        date:    Override the update date (``YYYY-MM-DD``). Defaults to today.
+        user_id:         Optional user id filter for holdings.
+        date:            Override the update date (``YYYY-MM-DD``). Defaults to today.
+        exclude_user_id: Optional user id to exclude when ``user_id`` is not provided.
 
     Returns:
         An :class:`UpdateSummary` describing what happened.
@@ -68,8 +67,12 @@ def run_daily_update(
 
     conn = initialize_database()
     try:
-        effective_user_id = user_id or resolve_default_user_id()
-        holdings: list[Holding] = get_all_holdings(conn, user_id=effective_user_id)
+        if user_id:
+            holdings: list[Holding] = get_all_holdings(conn, user_id=user_id)
+        else:
+            holdings = get_all_holdings(conn)
+            if exclude_user_id:
+                holdings = [h for h in holdings if h.user_id != exclude_user_id]
         summary.total_holdings = len(holdings)
 
         if not holdings:

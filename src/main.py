@@ -14,6 +14,7 @@ from src.db import (
     insert_holding,
     resolve_default_user_id,
 )
+from src.services.snapshots import run_daily_snapshot_capture
 from src.services.updater import run_daily_update
 from src.utils.dates import is_valid_date_str, today_str
 from src.utils.logging_config import setup_logging
@@ -85,7 +86,16 @@ def cmd_update_daily(args: argparse.Namespace) -> int:
         print(f"Invalid date format: '{date_override}'. Expected YYYY-MM-DD.", file=sys.stderr)
         return 2
 
-    summary = run_daily_update(user_id=_effective_user_id(args.user_id), date=date_override)
+    if args.exclude_user_id and not args.all_users:
+        print("--exclude-user-id can only be used together with --all-users.", file=sys.stderr)
+        return 2
+
+    selected_user_id = None if args.all_users else _effective_user_id(args.user_id)
+    summary = run_daily_update(
+        user_id=selected_user_id,
+        date=date_override,
+        exclude_user_id=args.exclude_user_id,
+    )
     print(summary)
     return 0 if summary.failed == 0 else 1
 
@@ -146,6 +156,26 @@ def cmd_show_daily(args: argparse.Namespace) -> int:
         conn.close()
 
 
+def cmd_snapshot_daily(args: argparse.Namespace) -> int:
+    date_override = args.date if args.date else None
+    if date_override and not is_valid_date_str(date_override):
+        print(f"Invalid date format: '{date_override}'. Expected YYYY-MM-DD.", file=sys.stderr)
+        return 2
+
+    if args.exclude_user_id and not args.all_users:
+        print("--exclude-user-id can only be used together with --all-users.", file=sys.stderr)
+        return 2
+
+    selected_user_id = None if args.all_users else _effective_user_id(args.user_id)
+    summary = run_daily_snapshot_capture(
+        user_id=selected_user_id,
+        date=date_override,
+        exclude_user_id=args.exclude_user_id,
+    )
+    print(summary)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="portfolio-tracker",
@@ -188,6 +218,36 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="YYYY-MM-DD",
         help="Override the update date (default: today).",
     )
+    p_upd.add_argument(
+        "--all-users",
+        action="store_true",
+        help="Update all users' holdings (ignores --user-id).",
+    )
+    p_upd.add_argument(
+        "--exclude-user-id",
+        metavar="UUID",
+        help="When using --all-users, exclude holdings belonging to this user id.",
+    )
+
+    p_snap = sub.add_parser(
+        "snapshot-daily",
+        help="Capture per-holding daily portfolio snapshots from holdings + daily prices + FX.",
+    )
+    p_snap.add_argument(
+        "--date",
+        metavar="YYYY-MM-DD",
+        help="Override the snapshot date (default: today).",
+    )
+    p_snap.add_argument(
+        "--all-users",
+        action="store_true",
+        help="Capture snapshots for all users (ignores --user-id).",
+    )
+    p_snap.add_argument(
+        "--exclude-user-id",
+        metavar="UUID",
+        help="When using --all-users, exclude holdings belonging to this user id.",
+    )
 
     sub.add_parser("show-holdings", help="Display holdings for this user.")
 
@@ -211,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
         "init-db": cmd_init_db,
         "seed-holdings": cmd_seed_holdings,
         "update-daily": cmd_update_daily,
+        "snapshot-daily": cmd_snapshot_daily,
         "show-holdings": cmd_show_holdings,
         "show-daily": cmd_show_daily,
     }
