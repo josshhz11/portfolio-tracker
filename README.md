@@ -33,13 +33,12 @@ portfolio-tracker/
 │   ├── run_daily_update.py
 │   └── seed_holdings.py
 ├── src/
+│   ├── config.py          # central config (paths, constants)
+│   ├── db.py              # all Supabase/Postgres operations
+│   ├── models.py          # Holding, DailyPrice, CurrencyRate dataclasses
+│   ├── main.py            # argparse CLI entry-point
 │   ├── api/
-│   │   ├── __init__.py
 │   │   └── app.py         # FastAPI backend routes
-│   ├── config.py
-│   ├── db.py
-│   ├── main.py
-│   ├── models.py
 │   ├── services/
 │   │   ├── fx_data.py
 │   │   ├── market_data.py
@@ -185,6 +184,31 @@ All commands accept `--user-id UUID` (or use `PORTFOLIO_USER_ID` env var).
 
 ```bash
 pytest tests/ -v
+```
+
+### Run the FastAPI backend
+
+```bash
+uvicorn src.api.app:app --reload
+```
+
+- Open interactive docs at `http://127.0.0.1:8000/docs`.
+- API routes cover holdings CRUD, daily update trigger, snapshot and daily prices, plus market/FX helper endpoints.
+- User-scoped endpoints are JWT-only and require `Authorization: Bearer <supabase-access-token>`.
+- Configure one of:
+	- `SUPABASE_JWT_SECRET` (HS256 projects), or
+	- `SUPABASE_PROJECT_URL` (RS256/JWKS verification via `/auth/v1/.well-known/jwks.json`).
+- JWT user scope is enforced via the token `sub` claim matching `{user_id}` in the route.
+- Frontend local origins are allowed by default (`http://localhost:3000`, `http://localhost:5173`). Override via `API_CORS_ORIGINS` (comma-separated).
+
+Common frontend query patterns:
+
+```bash
+# Paginated holdings with filters
+GET /users/{user_id}/holdings?limit=50&offset=0&ticker=AAPL&platform=IBKR&currency=USD
+
+# Paginated daily snapshot with filters
+GET /users/{user_id}/daily/snapshot?date=2026-03-29&limit=50&offset=0&currency=USD
 ```
 
 ### Dashboard (Streamlit)
