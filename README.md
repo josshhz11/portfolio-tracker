@@ -27,6 +27,11 @@ portfolio-tracker/
 ├── data/
 │   ├── .gitkeep
 │   └── schema.sql         # Supabase/Postgres schema
+├── frontend/              # Next.js user-facing web app
+│   ├── src/app/
+│   │   ├── login/page.tsx
+│   │   └── page.tsx
+│   └── .env.local.example
 ├── scripts/
 │   ├── check_supabase_connection.py
 │   ├── init_db.py
@@ -210,6 +215,23 @@ GET /users/{user_id}/holdings?limit=50&offset=0&ticker=AAPL&platform=IBKR&curren
 # Paginated daily snapshot with filters
 GET /users/{user_id}/daily/snapshot?date=2026-03-29&limit=50&offset=0&currency=USD
 ```
+
+### Run the Next.js frontend
+
+```bash
+cd frontend
+cp .env.local.example .env.local
+# Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local
+npm install
+npm run dev
+```
+
+- Open `http://localhost:3000`.
+- Login/registration is handled by Supabase Auth.
+- Dashboard includes:
+	- overall portfolio trend chart (SGD and % modes with range toggles)
+	- multi-line individual holdings chart with ticker selection
+	- holdings and trades tables for the signed-in user
 
 ### Dashboard (Streamlit)
 
