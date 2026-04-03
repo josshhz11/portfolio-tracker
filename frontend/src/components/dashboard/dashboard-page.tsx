@@ -12,7 +12,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { LogOut, RefreshCw } from "lucide-react";
+import { CheckCircle2, LogOut, RefreshCw, Upload, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabase";
 
@@ -54,6 +54,23 @@ type TradeRow = {
 
 type RangeKey = "3M" | "6M" | "YTD" | "1Y" | "ALL";
 type MetricKey = "value" | "pct";
+
+type TradeFormState = {
+  ticker: string;
+  tradeType: "BUY" | "SELL";
+  currency: string;
+  price: string;
+  shares: string;
+  platform: string;
+};
+
+type CsvHoldingInput = {
+  ticker: string;
+  shares_owned: number;
+  invested_amount: number;
+  currency: string;
+  platform: string;
+};
 
 const chartPalette = [
   "#e76f51",
@@ -103,6 +120,28 @@ export function DashboardPage() {
   const [range, setRange] = useState<RangeKey>("6M");
   const [metric, setMetric] = useState<MetricKey>("value");
   const [selectedTickers, setSelectedTickers] = useState<string[]>([]);
+  const [tradeModalOpen, setTradeModalOpen] = useState(false);
+  const [tradeSubmitting, setTradeSubmitting] = useState(false);
+  const [tradeError, setTradeError] = useState<string | null>(null);
+  const [showTradeSuccess, setShowTradeSuccess] = useState(false);
+  const [csvFile, setCsvFile] = useState<File | null>(null);
+  const [csvUploading, setCsvUploading] = useState(false);
+  const [csvError, setCsvError] = useState<string | null>(null);
+
+  const [tradeForm, setTradeForm] = useState<TradeFormState>({
+    ticker: "",
+    tradeType: "BUY",
+    currency: "USD",
+    price: "",
+    shares: "",
+    platform: "",
+  });
+
+  const liveTradeAmount = useMemo(() => {
+    const price = Number(tradeForm.price || 0);
+    const shares = Number(tradeForm.shares || 0);
+    return Number.isFinite(price * shares) ? price * shares : 0;
+  }, [tradeForm.price, tradeForm.shares]);
 
   const tickerByHoldingId = useMemo(() => {
     const map = new Map<number, string>();
@@ -300,6 +339,147 @@ export function DashboardPage() {
     router.push("/login");
   }
 
+  function parseHoldingsCsv(csvText: string): CsvHoldingInput[] {
+    const lines = csvText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
+    if (lines.length < 2) {
+      throw new Error("CSV must include a header row and at least one data row.");
+    }
+
+    const header = lines[0]
+      .split(",")
+      .map((h) => h.trim().toLowerCase());
+    const required = ["ticker", "shares_owned", "invested_amount", "currency", "platform"];
+    const missing = required.filter((key) => !header.includes(key));
+    if (missing.length > 0) {
+      throw new Error(`Missing required CSV header(s): ${missing.join(", ")}`);
+    }
+
+    const idx = (name: string) => header.indexOf(name);
+    const parsed: CsvHoldingInput[] = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(",").map((c) => c.trim());
+      const ticker = cols[idx("ticker")]?.toUpperCase();
+      const sharesOwned = Number(cols[idx("shares_owned")]);
+      const investedAmount = Number(cols[idx("invested_amount")]);
+      const currency = cols[idx("currency")]?.toUpperCase();
+      const platform = cols[idx("platform")];
+
+      if (!ticker || !currency || !platform || !Number.isFinite(sharesOwned) || !Number.isFinite(investedAmount)) {
+        throw new Error(`Invalid data at CSV line ${i + 1}.`);
+      }
+      if (sharesOwned < 0 || investedAmount < 0) {
+        throw new Error(`Negative values are not allowed at CSV line ${i + 1}.`);
+      }
+
+      parsed.push({
+        ticker,
+        shares_owned: sharesOwned,
+        invested_amount: investedAmount,
+        currency,
+        platform,
+      });
+    }
+
+    return parsed;
+  }
+
+  async function handleSeedUpload() {
+    if (holdings.length > 0) {
+      setCsvError("CSV upload is only enabled for first-time users with zero holdings.");
+      return;
+    }
+    if (!csvFile) {
+      setCsvError("Please choose a CSV file first.");
+      return;
+    }
+
+    setCsvUploading(true);
+    setCsvError(null);
+    try {
+      const text = await csvFile.text();
+      const parsedRows = parseHoldingsCsv(text);
+      if (parsedRows.length === 0) {
+        throw new Error("No valid rows found in CSV file.");
+      }
+
+      const supabase = getSupabaseClient();
+      const payload = parsedRows.map((row) => ({
+        ...row,
+        user_id: userId,
+      }));
+
+      const { error: insertError } = await (supabase.from("holdings") as any).insert(payload);
+      if (insertError) throw insertError;
+
+      setCsvFile(null);
+      await refreshData();
+    } catch (err) {
+      setCsvError(err instanceof Error ? err.message : "Failed to upload holdings CSV.");
+    } finally {
+      setCsvUploading(false);
+    }
+  }
+
+  async function handleTradeSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setTradeError(null);
+
+    const ticker = tradeForm.ticker.trim().toUpperCase();
+    const platform = tradeForm.platform.trim();
+    const currency = tradeForm.currency.trim().toUpperCase();
+    const price = Number(tradeForm.price);
+    const shares = Number(tradeForm.shares);
+    const cashAmount = price * shares;
+
+    if (!ticker || !platform || !currency) {
+      setTradeError("Ticker, currency, and platform are required.");
+      return;
+    }
+    if (!Number.isFinite(price) || !Number.isFinite(shares) || price <= 0 || shares <= 0) {
+      setTradeError("Price and shares must be positive numbers.");
+      return;
+    }
+
+    setTradeSubmitting(true);
+    try {
+      const supabase = getSupabaseClient();
+      const { error: insertError } = await (supabase.from("trades") as any).insert({
+        user_id: userId,
+        ticker,
+        trade_type: tradeForm.tradeType,
+        currency,
+        cash_amount: cashAmount,
+        shares,
+        platform,
+        traded_at: new Date().toISOString(),
+      });
+
+      if (insertError) throw insertError;
+
+      setTradeModalOpen(false);
+      setTradeForm({
+        ticker: "",
+        tradeType: "BUY",
+        currency: "USD",
+        price: "",
+        shares: "",
+        platform: "",
+      });
+      setShowTradeSuccess(true);
+      window.setTimeout(() => setShowTradeSuccess(false), 2200);
+      await refreshData();
+    } catch (err) {
+      setTradeError(err instanceof Error ? err.message : "Failed to submit trade.");
+    } finally {
+      setTradeSubmitting(false);
+    }
+  }
+
   useEffect(() => {
     const run = async () => {
       try {
@@ -351,8 +531,8 @@ export function DashboardPage() {
           <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
         ) : null}
 
-        <section className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-          <div className="xl:col-span-2 space-y-6">
+        <section className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+          <div className="xl:col-span-7 space-y-6">
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
                 <h2 className="text-lg font-semibold">Overall Portfolio Trend</h2>
@@ -459,9 +639,34 @@ export function DashboardPage() {
             </div>
           </div>
 
-          <div className="space-y-6">
+          <div className="xl:col-span-5 space-y-6">
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
               <h2 className="text-lg font-semibold mb-3">Current Holdings</h2>
+              {holdings.length === 0 ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 mb-4">
+                  <p className="text-sm text-amber-900 font-medium mb-2">First-time setup: upload your holdings CSV</p>
+                  <p className="text-xs text-amber-700 mb-3">
+                    Required headers: ticker,shares_owned,invested_amount,currency,platform
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="file"
+                      accept=".csv,text/csv"
+                      onChange={(e) => setCsvFile(e.target.files?.[0] || null)}
+                      className="block w-full text-xs text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-900 file:px-3 file:py-2 file:text-white"
+                    />
+                    <button
+                      onClick={handleSeedUpload}
+                      disabled={csvUploading || !csvFile}
+                      className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white disabled:opacity-60"
+                    >
+                      <Upload size={14} />
+                      {csvUploading ? "Uploading..." : "Seed Holdings"}
+                    </button>
+                  </div>
+                  {csvError ? <p className="text-xs text-rose-600 mt-2">{csvError}</p> : null}
+                </div>
+              ) : null}
               <div className="overflow-auto max-h-[360px]">
                 <table className="w-full text-sm">
                   <thead className="text-left text-slate-500">
@@ -469,6 +674,7 @@ export function DashboardPage() {
                       <th className="py-2">Ticker</th>
                       <th className="py-2">Shares</th>
                       <th className="py-2">Cost/share</th>
+                      <th className="py-2">Currency</th>
                       <th className="py-2">Price</th>
                       <th className="py-2">Last Price</th>
                     </tr>
@@ -478,7 +684,8 @@ export function DashboardPage() {
                       <tr key={row.id} className="border-t border-slate-100">
                         <td className="py-2 font-medium">{row.ticker}</td>
                         <td className="py-2">{Number(row.shares_owned).toFixed(3)}</td>
-                        <td className="py-2">{row.costPerShare.toFixed(2)} {row.currency}</td>
+                        <td className="py-2">{row.costPerShare.toFixed(2)}</td>
+                        <td className="py-2">{row.currency}</td>
                         <td className="py-2">
                           {row.latestPrice != null ? Number(row.latestPrice).toFixed(2) : "-"}
                         </td>
@@ -491,7 +698,18 @@ export function DashboardPage() {
             </div>
 
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-              <h2 className="text-lg font-semibold mb-3">Trades</h2>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold">Trades</h2>
+                <button
+                  onClick={() => {
+                    setTradeError(null);
+                    setTradeModalOpen(true);
+                  }}
+                  className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700"
+                >
+                  Add Trade
+                </button>
+              </div>
               {trades.length === 0 ? (
                 <p className="text-sm text-slate-500">No trades have been made so far.</p>
               ) : (
@@ -526,6 +744,136 @@ export function DashboardPage() {
           </div>
         </section>
       </div>
+
+      {tradeModalOpen ? (
+        <div className="fixed inset-0 z-40 bg-slate-900/45 backdrop-blur-[1px] flex items-center justify-center px-4">
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl border border-slate-200 p-5">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Add Trade</h3>
+              <button
+                onClick={() => setTradeModalOpen(false)}
+                className="rounded-md p-1 text-slate-500 hover:bg-slate-100"
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleTradeSubmit} className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-600 mb-1">Ticker</label>
+                  <input
+                    value={tradeForm.ticker}
+                    onChange={(e) => setTradeForm((prev) => ({ ...prev, ticker: e.target.value }))}
+                    placeholder="AAPL"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-600 mb-1">Trade Type</label>
+                  <select
+                    value={tradeForm.tradeType}
+                    onChange={(e) =>
+                      setTradeForm((prev) => ({ ...prev, tradeType: e.target.value as "BUY" | "SELL" }))
+                    }
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  >
+                    <option value="BUY">BUY</option>
+                    <option value="SELL">SELL</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-600 mb-1">Currency</label>
+                  <input
+                    value={tradeForm.currency}
+                    onChange={(e) => setTradeForm((prev) => ({ ...prev, currency: e.target.value }))}
+                    placeholder="USD"
+                    maxLength={3}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm uppercase"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-600 mb-1">Platform</label>
+                  <input
+                    value={tradeForm.platform}
+                    onChange={(e) => setTradeForm((prev) => ({ ...prev, platform: e.target.value }))}
+                    placeholder="IBKR"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-600 mb-1">Price</label>
+                  <input
+                    type="number"
+                    step="0.0001"
+                    min="0"
+                    value={tradeForm.price}
+                    onChange={(e) => setTradeForm((prev) => ({ ...prev, price: e.target.value }))}
+                    placeholder="101.95"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-600 mb-1">Shares</label>
+                  <input
+                    type="number"
+                    step="0.000001"
+                    min="0"
+                    value={tradeForm.shares}
+                    onChange={(e) => setTradeForm((prev) => ({ ...prev, shares: e.target.value }))}
+                    placeholder="10"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-sm text-slate-700">
+                Amount: {liveTradeAmount.toFixed(2)} {tradeForm.currency.trim().toUpperCase() || "USD"}
+              </div>
+
+              {tradeError ? <p className="text-xs text-rose-600">{tradeError}</p> : null}
+
+              <div className="pt-1 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTradeModalOpen(false)}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={tradeSubmitting}
+                  className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
+                >
+                  {tradeSubmitting ? "Submitting..." : "Submit Trade"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {showTradeSuccess ? (
+        <div className="fixed bottom-6 right-6 z-50 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 shadow-lg text-emerald-800 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <CheckCircle2 size={18} />
+            Trade successfully submitted
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
