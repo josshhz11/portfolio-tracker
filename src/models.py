@@ -62,6 +62,34 @@ class DailySnapshot:
 
 
 @dataclass
+class CashAccount:
+    """Represents a cash balance held at a platform in a specific currency."""
+
+    user_id: str
+    platform: str
+    currency: str
+    balance: float
+    id: Optional[int] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+@dataclass
+class CashSnapshot:
+    """Computed per-cash-account snapshot for a given date."""
+
+    cash_account_id: int
+    snapshot_date: str
+    platform: str
+    currency: str
+    balance: float
+    fx_rate: float
+    balance_sgd: float
+    id: Optional[int] = None
+    created_at: Optional[str] = None
+
+
+@dataclass
 class CurrencyRate:
     """Represents a daily FX rate versus SGD."""
 

@@ -5,7 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from src.db import get_daily_snapshot_by_date, initialize_database, upsert_portfolio_snapshot
+from src.db import (
+    get_cash_accounts,
+    get_currency_rate,
+    get_daily_snapshot_by_date,
+    initialize_database,
+    upsert_cash_snapshot,
+    upsert_portfolio_snapshot,
+)
+from src.models import CashSnapshot
+from src.config import BASE_CURRENCY
 from src.utils.dates import today_str
 from src.utils.logging_config import get_logger
 
@@ -17,10 +26,18 @@ class SnapshotCaptureSummary:
     """Result summary for daily portfolio snapshot capture."""
 
     date: str
-    processed: int = 0
+    portfolio_processed: int = 0
+    cash_processed: int = 0
+
+    @property
+    def processed(self) -> int:
+        return self.portfolio_processed + self.cash_processed
 
     def __str__(self) -> str:
-        return f"Date: {self.date} | Snapshot rows upserted: {self.processed}"
+        return (
+            f"Date: {self.date} | Portfolio snapshots: {self.portfolio_processed} | "
+            f"Cash snapshots: {self.cash_processed} | Total: {self.processed}"
+        )
 
 
 def run_daily_snapshot_capture(
@@ -28,7 +45,7 @@ def run_daily_snapshot_capture(
     date: Optional[str] = None,
     exclude_user_id: Optional[str] = None,
 ) -> SnapshotCaptureSummary:
-    """Capture per-holding snapshots for a given date into portfolio_snapshots."""
+    """Capture daily snapshots for holdings and cash accounts."""
     snapshot_date = date or today_str()
     summary = SnapshotCaptureSummary(date=snapshot_date)
 
@@ -62,7 +79,45 @@ def run_daily_snapshot_capture(
                 snapshot=row,
                 date=snapshot_date,
             )
-            summary.processed += 1
+            summary.portfolio_processed += 1
+
+        cash_accounts = get_cash_accounts(
+            conn=conn,
+            user_id=user_id,
+            exclude_user_id=exclude_user_id,
+        )
+
+        for cash_account in cash_accounts:
+            if cash_account.currency.upper() == BASE_CURRENCY:
+                fx_rate = 1.0
+            else:
+                fx_rate = get_currency_rate(conn, cash_account.currency.upper(), snapshot_date)
+                if fx_rate is None:
+                    logger.warning(
+                        "FX rate unavailable for cash account id=%d (%s/%s) on %s; skipping.",
+                        cash_account.id or 0,
+                        cash_account.platform,
+                        cash_account.currency,
+                        snapshot_date,
+                    )
+                    continue
+
+            balance = float(cash_account.balance)
+            cash_snapshot = CashSnapshot(
+                cash_account_id=int(cash_account.id or 0),
+                snapshot_date=snapshot_date,
+                platform=cash_account.platform,
+                currency=cash_account.currency,
+                balance=balance,
+                fx_rate=fx_rate,
+                balance_sgd=balance * fx_rate,
+            )
+            upsert_cash_snapshot(
+                conn=conn,
+                user_id=cash_account.user_id,
+                cash_snapshot=cash_snapshot,
+            )
+            summary.cash_processed += 1
 
         conn.commit()
         logger.info("Daily snapshot capture complete. %s", summary)
