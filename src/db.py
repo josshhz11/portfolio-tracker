@@ -9,7 +9,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from src.config import BASE_DIR, DEFAULT_USER_ID, SUPABASE_DB_URL
-from src.models import DailyPrice, DailySnapshot, Holding
+from src.models import CashAccount, CashSnapshot, DailyPrice, DailySnapshot, Holding
 from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -324,6 +324,56 @@ def get_daily_snapshot_by_date(
     return snapshots
 
 
+def get_cash_accounts(
+    conn: psycopg.Connection,
+    user_id: Optional[str] = None,
+    exclude_user_id: Optional[str] = None,
+) -> list[CashAccount]:
+    """Return cash accounts, optionally filtered by user_id or excluded user_id."""
+    sql = """
+        SELECT
+            id,
+            user_id::text AS user_id,
+            platform,
+            currency,
+            balance,
+            created_at::text AS created_at,
+            updated_at::text AS updated_at
+        FROM public.cash_accounts
+        {where_clause}
+        ORDER BY id
+    """
+    params: list[object] = []
+    conditions: list[str] = []
+    if user_id:
+        conditions.append("user_id = %s")
+        params.append(user_id)
+    if exclude_user_id:
+        conditions.append("user_id <> %s")
+        params.append(exclude_user_id)
+
+    where_clause = ""
+    if conditions:
+        where_clause = f"WHERE {' AND '.join(conditions)}"
+
+    with conn.cursor() as cur:
+        cur.execute(sql.format(where_clause=where_clause), tuple(params))
+        rows = cur.fetchall()
+
+    return [
+        CashAccount(
+            id=int(row["id"]),
+            user_id=row["user_id"],
+            platform=row["platform"],
+            currency=row["currency"],
+            balance=float(row["balance"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+        for row in rows
+    ]
+
+
 def upsert_portfolio_snapshot(
     conn: psycopg.Connection,
     user_id: str,
@@ -371,6 +421,47 @@ def upsert_portfolio_snapshot(
                 snapshot.market_value_sgd,
                 snapshot.profit,
                 snapshot.profit_sgd,
+            ),
+        )
+
+
+def upsert_cash_snapshot(
+    conn: psycopg.Connection,
+    user_id: str,
+    cash_snapshot: CashSnapshot,
+) -> None:
+    """Insert or update a cash snapshot row for a cash account/date."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO public.cash_snapshots (
+                user_id,
+                cash_account_id,
+                snapshot_date,
+                platform,
+                currency,
+                balance,
+                fx_rate,
+                balance_sgd
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (cash_account_id, snapshot_date)
+            DO UPDATE SET
+                balance = EXCLUDED.balance,
+                fx_rate = EXCLUDED.fx_rate,
+                balance_sgd = EXCLUDED.balance_sgd,
+                platform = EXCLUDED.platform,
+                currency = EXCLUDED.currency
+            """,
+            (
+                user_id,
+                cash_snapshot.cash_account_id,
+                cash_snapshot.snapshot_date,
+                cash_snapshot.platform,
+                cash_snapshot.currency,
+                cash_snapshot.balance,
+                cash_snapshot.fx_rate,
+                cash_snapshot.balance_sgd,
             ),
         )
 
