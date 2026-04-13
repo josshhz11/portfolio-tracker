@@ -12,7 +12,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { CheckCircle2, LogOut, RefreshCw, Upload, X } from "lucide-react";
+import { CheckCircle2, LogOut, Plus, RefreshCw, Upload, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabase";
 
@@ -61,6 +61,14 @@ type TradeFormState = {
   currency: string;
   price: string;
   shares: string;
+  platform: string;
+};
+
+type HoldingFormState = {
+  ticker: string;
+  sharesOwned: string;
+  investedAmount: string;
+  currency: string;
   platform: string;
 };
 
@@ -124,6 +132,10 @@ export function DashboardPage() {
   const [tradeSubmitting, setTradeSubmitting] = useState(false);
   const [tradeError, setTradeError] = useState<string | null>(null);
   const [showTradeSuccess, setShowTradeSuccess] = useState(false);
+  const [holdingModalOpen, setHoldingModalOpen] = useState(false);
+  const [holdingSubmitting, setHoldingSubmitting] = useState(false);
+  const [holdingError, setHoldingError] = useState<string | null>(null);
+  const [showHoldingSuccess, setShowHoldingSuccess] = useState(false);
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [csvUploading, setCsvUploading] = useState(false);
   const [csvError, setCsvError] = useState<string | null>(null);
@@ -134,6 +146,14 @@ export function DashboardPage() {
     currency: "USD",
     price: "",
     shares: "",
+    platform: "",
+  });
+
+  const [holdingForm, setHoldingForm] = useState<HoldingFormState>({
+    ticker: "",
+    sharesOwned: "",
+    investedAmount: "",
+    currency: "USD",
     platform: "",
   });
 
@@ -480,6 +500,61 @@ export function DashboardPage() {
     }
   }
 
+  async function handleHoldingSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setHoldingError(null);
+
+    const ticker = holdingForm.ticker.trim().toUpperCase();
+    const platform = holdingForm.platform.trim();
+    const currency = holdingForm.currency.trim().toUpperCase();
+    const sharesOwned = Number(holdingForm.sharesOwned);
+    const investedAmount = Number(holdingForm.investedAmount);
+
+    if (!ticker || !platform || !currency) {
+      setHoldingError("Ticker, currency, and platform are required.");
+      return;
+    }
+    if (!Number.isFinite(sharesOwned) || sharesOwned <= 0) {
+      setHoldingError("Shares owned must be a positive number.");
+      return;
+    }
+    if (!Number.isFinite(investedAmount) || investedAmount < 0) {
+      setHoldingError("Invested amount must be zero or greater.");
+      return;
+    }
+
+    setHoldingSubmitting(true);
+    try {
+      const supabase = getSupabaseClient();
+      const { error: insertError } = await (supabase.from("holdings") as any).insert({
+        user_id: userId,
+        ticker,
+        shares_owned: sharesOwned,
+        invested_amount: investedAmount,
+        currency,
+        platform,
+      });
+
+      if (insertError) throw insertError;
+
+      setHoldingModalOpen(false);
+      setHoldingForm({
+        ticker: "",
+        sharesOwned: "",
+        investedAmount: "",
+        currency: "USD",
+        platform: "",
+      });
+      setShowHoldingSuccess(true);
+      window.setTimeout(() => setShowHoldingSuccess(false), 2200);
+      await refreshData();
+    } catch (err) {
+      setHoldingError(err instanceof Error ? err.message : "Failed to add holding.");
+    } finally {
+      setHoldingSubmitting(false);
+    }
+  }
+
   useEffect(() => {
     const run = async () => {
       try {
@@ -641,7 +716,19 @@ export function DashboardPage() {
 
           <div className="xl:col-span-5 space-y-6">
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-              <h2 className="text-lg font-semibold mb-3">Current Holdings</h2>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold">Current Holdings</h2>
+                <button
+                  onClick={() => {
+                    setHoldingError(null);
+                    setHoldingModalOpen(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700"
+                >
+                  <Plus size={14} />
+                  Add Holding
+                </button>
+              </div>
               {holdings.length === 0 ? (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 mb-4">
                   <p className="text-sm text-amber-900 font-medium mb-2">First-time setup: upload your holdings CSV</p>
@@ -866,11 +953,122 @@ export function DashboardPage() {
         </div>
       ) : null}
 
+      {holdingModalOpen ? (
+        <div className="fixed inset-0 z-40 bg-slate-900/45 backdrop-blur-[1px] flex items-center justify-center px-4">
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl border border-slate-200 p-5">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Add Holding</h3>
+              <button
+                onClick={() => setHoldingModalOpen(false)}
+                className="rounded-md p-1 text-slate-500 hover:bg-slate-100"
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleHoldingSubmit} className="space-y-3">
+              <div>
+                <label className="block text-xs text-slate-600 mb-1">Ticker</label>
+                <input
+                  value={holdingForm.ticker}
+                  onChange={(e) => setHoldingForm((prev) => ({ ...prev, ticker: e.target.value }))}
+                  placeholder="AAPL"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-600 mb-1">Shares Owned</label>
+                  <input
+                    type="number"
+                    step="0.000001"
+                    min="0"
+                    value={holdingForm.sharesOwned}
+                    onChange={(e) => setHoldingForm((prev) => ({ ...prev, sharesOwned: e.target.value }))}
+                    placeholder="10"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-600 mb-1">Invested Amount</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={holdingForm.investedAmount}
+                    onChange={(e) => setHoldingForm((prev) => ({ ...prev, investedAmount: e.target.value }))}
+                    placeholder="1500.00"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-600 mb-1">Currency</label>
+                  <input
+                    value={holdingForm.currency}
+                    onChange={(e) => setHoldingForm((prev) => ({ ...prev, currency: e.target.value }))}
+                    placeholder="USD"
+                    maxLength={3}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm uppercase"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-600 mb-1">Platform</label>
+                  <input
+                    value={holdingForm.platform}
+                    onChange={(e) => setHoldingForm((prev) => ({ ...prev, platform: e.target.value }))}
+                    placeholder="IBKR"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    required
+                  />
+                </div>
+              </div>
+
+              {holdingError ? <p className="text-xs text-rose-600">{holdingError}</p> : null}
+
+              <div className="pt-1 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setHoldingModalOpen(false)}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={holdingSubmitting}
+                  className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
+                >
+                  {holdingSubmitting ? "Saving..." : "Save Holding"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
       {showTradeSuccess ? (
         <div className="fixed bottom-6 right-6 z-50 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 shadow-lg text-emerald-800 animate-in fade-in slide-in-from-bottom-2 duration-300">
           <div className="flex items-center gap-2 text-sm font-medium">
             <CheckCircle2 size={18} />
             Trade successfully submitted
+          </div>
+        </div>
+      ) : null}
+
+      {showHoldingSuccess ? (
+        <div className="fixed bottom-6 right-6 z-50 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 shadow-lg text-emerald-800 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <CheckCircle2 size={18} />
+            Holding successfully added
           </div>
         </div>
       ) : null}
