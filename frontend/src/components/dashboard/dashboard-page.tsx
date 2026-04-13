@@ -52,6 +52,20 @@ type TradeRow = {
   traded_at: string;
 };
 
+type CashAccountRow = {
+  id: number;
+  user_id: string;
+  platform: string;
+  currency: string;
+  balance: number;
+  updated_at: string;
+};
+
+type CashSnapshotRow = {
+  snapshot_date: string;
+  balance_sgd: number;
+};
+
 type RangeKey = "3M" | "6M" | "YTD" | "1Y" | "ALL";
 type MetricKey = "value" | "pct";
 
@@ -91,6 +105,8 @@ const chartPalette = [
   "#e63946",
 ];
 
+const TOTAL_CASH_SERIES_LABEL = "Total Cash";
+
 function getRangeStart(range: RangeKey): Date | null {
   const now = new Date();
   if (range === "3M") return subMonths(now, 3);
@@ -124,10 +140,13 @@ export function DashboardPage() {
   const [latestPrices, setLatestPrices] = useState<Record<string, DailyPriceRow>>({});
   const [snapshots, setSnapshots] = useState<SnapshotRow[]>([]);
   const [trades, setTrades] = useState<TradeRow[]>([]);
+  const [cashAccounts, setCashAccounts] = useState<CashAccountRow[]>([]);
+  const [cashSnapshots, setCashSnapshots] = useState<CashSnapshotRow[]>([]);
 
   const [range, setRange] = useState<RangeKey>("6M");
   const [metric, setMetric] = useState<MetricKey>("value");
   const [selectedTickers, setSelectedTickers] = useState<string[]>([]);
+  const [hasInitializedTickerSelection, setHasInitializedTickerSelection] = useState(false);
   const [tradeModalOpen, setTradeModalOpen] = useState(false);
   const [tradeSubmitting, setTradeSubmitting] = useState(false);
   const [tradeError, setTradeError] = useState<string | null>(null);
@@ -170,20 +189,29 @@ export function DashboardPage() {
   }, [holdings]);
 
   const allTickers = useMemo(() => {
-    return Array.from(new Set(holdings.map((h) => h.ticker))).sort();
+    const stockTickers = Array.from(new Set(holdings.map((h) => h.ticker))).sort();
+    return [TOTAL_CASH_SERIES_LABEL, ...stockTickers];
   }, [holdings]);
 
   useEffect(() => {
-    if (allTickers.length > 0 && selectedTickers.length === 0) {
+    if (loading || hasInitializedTickerSelection) return;
+    if (allTickers.length > 0) {
       setSelectedTickers(allTickers);
+      setHasInitializedTickerSelection(true);
     }
-  }, [allTickers, selectedTickers.length]);
+  }, [allTickers, loading, hasInitializedTickerSelection]);
 
   const filteredSnapshots = useMemo(() => {
     const start = getRangeStart(range);
     if (!start) return snapshots;
     return snapshots.filter((s) => parseISO(s.snapshot_date) >= start);
   }, [snapshots, range]);
+
+  const filteredCashSnapshots = useMemo(() => {
+    const start = getRangeStart(range);
+    if (!start) return cashSnapshots;
+    return cashSnapshots.filter((s) => parseISO(s.snapshot_date) >= start);
+  }, [cashSnapshots, range]);
 
   const portfolioSeries = useMemo(() => {
     const byDate = new Map<string, number>();
@@ -221,6 +249,15 @@ export function DashboardPage() {
       byDateTicker.set(row.snapshot_date, entry);
     }
 
+    if (selectedTickers.includes(TOTAL_CASH_SERIES_LABEL)) {
+      for (const row of filteredCashSnapshots) {
+        const entry = byDateTicker.get(row.snapshot_date) || {};
+        entry[TOTAL_CASH_SERIES_LABEL] =
+          (entry[TOTAL_CASH_SERIES_LABEL] || 0) + Number(row.balance_sgd);
+        byDateTicker.set(row.snapshot_date, entry);
+      }
+    }
+
     const points = Array.from(byDateTicker.entries())
       .map(([date, values]) => ({ date, ...values }))
       .sort((a, b) => ((a.date as string) < (b.date as string) ? -1 : 1));
@@ -247,7 +284,7 @@ export function DashboardPage() {
       }
       return clone;
     });
-  }, [filteredSnapshots, selectedTickers, tickerByHoldingId, metric]);
+  }, [filteredSnapshots, filteredCashSnapshots, selectedTickers, tickerByHoldingId, metric]);
 
   const holdingsTableRows = useMemo(() => {
     const latestSnapshotByHolding = new Map<number, SnapshotRow>();
@@ -304,20 +341,38 @@ export function DashboardPage() {
       .order("traded_at", { ascending: false })
       .limit(200);
 
-    const [holdingsRes, snapshotsRes, tradesRes] = await Promise.all([
+    const cashAccountsQuery = supabase
+      .from("cash_accounts")
+      .select("id,user_id,platform,currency,balance,updated_at")
+      .eq("user_id", uid)
+      .order("platform", { ascending: true });
+
+    const cashSnapshotsQuery = supabase
+      .from("cash_snapshots")
+      .select("snapshot_date,balance_sgd")
+      .eq("user_id", uid)
+      .order("snapshot_date", { ascending: true });
+
+    const [holdingsRes, snapshotsRes, tradesRes, cashAccountsRes, cashSnapshotsRes] = await Promise.all([
       holdingsQuery,
       snapshotsQuery,
       tradesQuery,
+      cashAccountsQuery,
+      cashSnapshotsQuery,
     ]);
 
     if (holdingsRes.error) throw holdingsRes.error;
     if (snapshotsRes.error) throw snapshotsRes.error;
     if (tradesRes.error) throw tradesRes.error;
+    if (cashAccountsRes.error) throw cashAccountsRes.error;
+    if (cashSnapshotsRes.error) throw cashSnapshotsRes.error;
 
     const loadedHoldings = (holdingsRes.data || []) as HoldingRow[];
     setHoldings(loadedHoldings);
     setSnapshots((snapshotsRes.data || []) as SnapshotRow[]);
     setTrades((tradesRes.data || []) as TradeRow[]);
+    setCashAccounts((cashAccountsRes.data || []) as CashAccountRow[]);
+    setCashSnapshots((cashSnapshotsRes.data || []) as CashSnapshotRow[]);
 
     const tickers = Array.from(new Set(loadedHoldings.map((h) => h.ticker)));
     if (tickers.length === 0) {
@@ -717,7 +772,7 @@ export function DashboardPage() {
           <div className="xl:col-span-5 space-y-6">
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-3 flex items-center justify-between gap-3">
-                <h2 className="text-lg font-semibold">Current Holdings</h2>
+                <h2 className="text-lg font-semibold">Current Stock Holdings</h2>
                 <button
                   onClick={() => {
                     setHoldingError(null);
@@ -781,6 +836,34 @@ export function DashboardPage() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+
+              <div className="mt-6">
+                <h3 className="text-base font-semibold mb-3">Current Cash Holdings</h3>
+                {cashAccounts.length === 0 ? (
+                  <p className="text-sm text-slate-500">No cash balances found.</p>
+                ) : (
+                  <div className="overflow-auto max-h-[260px]">
+                    <table className="w-full text-sm">
+                      <thead className="text-left text-slate-500">
+                        <tr>
+                          <th className="py-2">Platform</th>
+                          <th className="py-2">Currency</th>
+                          <th className="py-2">Balance</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cashAccounts.map((row) => (
+                          <tr key={row.id} className="border-t border-slate-100">
+                            <td className="py-2">{row.platform}</td>
+                            <td className="py-2">{row.currency}</td>
+                            <td className="py-2">{Number(row.balance).toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </div>
 
