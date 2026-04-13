@@ -37,6 +37,8 @@ data/*.db
 data/*.sqlite
 data/*.sqlite3
 data/seed_holdings.csv
+data/seed_cash_holdings.csv
+data/seed_cash_snapshots.csv
 
 # Streamlit local config
 .streamlit/
