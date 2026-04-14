@@ -552,6 +552,78 @@ def test_trade_sell_fails_when_shares_insufficient(db_conn) -> None:
     assert balance == pytest.approx(50.0)
 
 
+def test_trade_sell_full_exit_removes_holding_and_credits_cash(db_conn) -> None:
+    key = uuid.uuid4().hex[:8].upper()
+    platform = f"TCASH_{key}"
+    ticker = f"TCA_{key}_FULL_EXIT"
+    _cleanup_cash_and_trade_artifacts(db_conn, PORTFOLIO_USER_ID, platform, ticker)
+
+    holding_id = insert_holding(
+        db_conn,
+        user_id=PORTFOLIO_USER_ID,
+        ticker=ticker,
+        shares_owned=2.0,
+        invested_amount=200.0,
+        currency="USD",
+        platform=platform,
+    )
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO public.cash_accounts (user_id, platform, currency, balance)
+            VALUES (%s, %s, 'USD', %s)
+            """,
+            (PORTFOLIO_USER_ID, platform, 50.0),
+        )
+    db_conn.commit()
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO public.trades (
+                user_id,
+                holding_id,
+                ticker,
+                trade_type,
+                currency,
+                cash_amount,
+                shares,
+                platform,
+                traded_at
+            )
+            VALUES (%s, %s, %s, 'SELL', 'USD', %s, %s, %s, NOW())
+            RETURNING id
+            """,
+            (PORTFOLIO_USER_ID, holding_id, ticker, 220.0, 2.0, platform),
+        )
+        trade_row = cur.fetchone()
+    db_conn.commit()
+
+    assert trade_row is not None
+    trade_id = int(trade_row["id"])
+
+    holding = get_holding_by_id(db_conn, holding_id)
+    assert holding is None
+
+    balance = _get_cash_balance(db_conn, PORTFOLIO_USER_ID, platform, "USD")
+    assert balance == pytest.approx(270.0)
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, holding_id
+            FROM public.trades
+            WHERE id = %s
+            """,
+            (trade_id,),
+        )
+        trade_after = cur.fetchone()
+
+    assert trade_after is not None
+    assert trade_after["holding_id"] is None
+
+
 def test_upsert_cash_snapshot_insert_then_update(db_conn) -> None:
     key = uuid.uuid4().hex[:8].upper()
     platform = f"TCASH_{key}"

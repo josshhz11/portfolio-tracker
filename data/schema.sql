@@ -314,6 +314,7 @@ declare
     v_holding_user_id uuid;
     v_avg_cost numeric(20,6);
     v_cost_reduction numeric(20,6);
+    v_remaining_shares numeric(20,6);
 begin
     select h.user_id, h.shares_owned, h.invested_amount
     into v_holding_user_id, v_current_shares, v_current_invested
@@ -352,8 +353,22 @@ begin
     v_avg_cost := v_current_invested / v_current_shares;
     v_cost_reduction := new.shares * v_avg_cost;
 
+    v_remaining_shares := v_current_shares - new.shares;
+
+    -- Fully exited position: keep trade history but remove the now-empty holding row.
+    if v_remaining_shares <= 0 then
+        update public.trades
+        set holding_id = null
+        where holding_id = new.holding_id;
+
+        delete from public.holdings
+        where id = new.holding_id;
+
+        return new;
+    end if;
+
     update public.holdings
-    set shares_owned = shares_owned - new.shares,
+    set shares_owned = v_remaining_shares,
         invested_amount = greatest(invested_amount - v_cost_reduction, 0)
     where id = new.holding_id;
 
